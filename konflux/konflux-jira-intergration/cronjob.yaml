@@ -1,0 +1,421 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: konflux-compliance
+  labels:
+    name: konflux-compliance
+    team: acm-mce
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: compliance-scanner
+  namespace: konflux-compliance
+  labels:
+    app: compliance-scanner
+
+---
+# Secret for sensitive credentials
+# NOTE: Replace with actual values or use external secret management
+apiVersion: v1
+kind: Secret
+metadata:
+  name: compliance-scanner-credentials
+  namespace: konflux-compliance
+  labels:
+    app: compliance-scanner
+type: Opaque
+stringData:
+  # GitHub Personal Access Token for API access
+  github-token: "REPLACE_WITH_GITHUB_TOKEN"
+
+  # JIRA Personal Access Token
+  jira-api-token: "REPLACE_WITH_JIRA_API_TOKEN"
+
+  # JIRA username/email
+  jira-user: "your-email@redhat.com"
+
+  # Konflux cluster API endpoint
+  # Example: https://api.konflux.example.com:6443
+  konflux-api-endpoint: "REPLACE_WITH_KONFLUX_API_ENDPOINT"
+
+  # Konflux cluster access token
+  # This should be a ServiceAccount token with permissions to read PipelineRuns
+  # and Konflux resources (Components, Snapshots, etc.)
+  konflux-api-token: "REPLACE_WITH_KONFLUX_API_TOKEN"
+
+---
+# ConfigMap for configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: compliance-scanner-config
+  namespace: konflux-compliance
+  labels:
+    app: compliance-scanner
+data:
+  # JIRA Configuration
+  jira-server: "https://issues.redhat.com"
+  jira-project: "ACM"
+  jira-auth-type: "bearer"
+  jira-installation: "Local"
+  jira-board: "None"
+  jira-priority: "Critical"
+  jira-labels: "konflux,compliance,auto-created"
+
+  # Feature Flags
+  skip-duplicates: "true"
+  auto-close: "true"
+  retrigger-failed: "false"
+
+  # Optional: Squad filter (leave empty to scan all squads)
+  # squad-filter: "server-foundation"
+
+---
+# CronJob for ACM 2.15
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: compliance-scanner-acm-215
+  namespace: konflux-compliance
+  labels:
+    app: compliance-scanner
+    application: acm-215
+spec:
+  # Schedule: 8:00 AM and 1:00 PM US Eastern Time
+  # US Eastern Time: UTC-5 (EST) or UTC-4 (EDT)
+  # 8:00 AM EST/EDT = 1:00 PM / 12:00 PM UTC
+  # 1:00 PM EST/EDT = 6:00 PM / 5:00 PM UTC
+  # Using standard time (EST): 13:00 and 18:00 UTC
+  schedule: "0 13,18 * * 1-5"  # At 8am and 1pm EST, Mon-Fri
+
+  # Keep history of last 3 successful and 3 failed jobs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  # Concurrency policy: Do not allow concurrent runs
+  concurrencyPolicy: Forbid
+
+  # Job template
+  jobTemplate:
+    metadata:
+      labels:
+        app: compliance-scanner
+        application: acm-215
+    spec:
+      # Clean up completed jobs after 6 hours
+      ttlSecondsAfterFinished: 21600
+
+      # Retry once on failure
+      backoffLimit: 1
+
+      template:
+        metadata:
+          labels:
+            app: compliance-scanner
+            application: acm-215
+        spec:
+          serviceAccountName: compliance-scanner
+          restartPolicy: Never
+
+          containers:
+            - name: compliance-scanner
+              # Replace with your actual image
+              image: quay.io/your-org/compliance-scanner:latest
+              imagePullPolicy: Always
+
+              env:
+                # Application name
+                - name: APPLICATION_NAME
+                  value: "acm-215"
+
+                # Konflux cluster access
+                - name: KONFLUX_API_ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: compliance-scanner-credentials
+                      key: konflux-api-endpoint
+
+                - name: KONFLUX_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: compliance-scanner-credentials
+                      key: konflux-api-token
+
+                # GitHub token
+                - name: GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: compliance-scanner-credentials
+                      key: github-token
+
+                # JIRA credentials
+                - name: JIRA_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: compliance-scanner-credentials
+                      key: jira-api-token
+
+                - name: JIRA_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: compliance-scanner-credentials
+                      key: jira-user
+
+                # JIRA configuration
+                - name: JIRA_SERVER
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-server
+
+                - name: JIRA_PROJECT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-project
+
+                - name: JIRA_AUTH_TYPE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-auth-type
+
+                - name: JIRA_INSTALLATION
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-installation
+
+                - name: JIRA_BOARD
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-board
+
+                - name: JIRA_PRIORITY
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-priority
+
+                - name: JIRA_LABELS
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-labels
+
+                # Feature flags
+                - name: SKIP_DUPLICATES
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: skip-duplicates
+
+                - name: AUTO_CLOSE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: auto-close
+
+                - name: RETRIGGER_FAILED
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: retrigger-failed
+
+                # Optional: Squad filter
+                - name: SQUAD_FILTER
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: squad-filter
+                      optional: true
+
+              # Resource limits
+              resources:
+                requests:
+                  memory: "512Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "500m"
+
+              # Volume mounts for logs (optional)
+              volumeMounts:
+                - name: logs
+                  mountPath: /workspace/logs
+                - name: data
+                  mountPath: /workspace/data
+
+          volumes:
+            - name: logs
+              emptyDir: {}
+            - name: data
+              emptyDir: {}
+
+---
+# CronJob for MCE 2.9
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: compliance-scanner-mce-29
+  namespace: konflux-compliance
+  labels:
+    app: compliance-scanner
+    application: mce-29
+spec:
+  # Same schedule as ACM
+  schedule: "0 13,18 * * 1-5"  # At 8am and 1pm EST, Mon-Fri
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+
+  jobTemplate:
+    metadata:
+      labels:
+        app: compliance-scanner
+        application: mce-29
+    spec:
+      ttlSecondsAfterFinished: 21600
+      backoffLimit: 1
+
+      template:
+        metadata:
+          labels:
+            app: compliance-scanner
+            application: mce-29
+        spec:
+          serviceAccountName: compliance-scanner
+          restartPolicy: Never
+
+          containers:
+            - name: compliance-scanner
+              image: quay.io/your-org/compliance-scanner:latest
+              imagePullPolicy: Always
+
+              env:
+                # Application name - ONLY DIFFERENCE
+                - name: APPLICATION_NAME
+                  value: "mce-29"
+
+                # Konflux cluster access
+                - name: KONFLUX_API_ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: compliance-scanner-credentials
+                      key: konflux-api-endpoint
+
+                - name: KONFLUX_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: compliance-scanner-credentials
+                      key: konflux-api-token
+
+                # All other env vars same as ACM job
+                - name: GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: compliance-scanner-credentials
+                      key: github-token
+
+                - name: JIRA_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: compliance-scanner-credentials
+                      key: jira-api-token
+
+                - name: JIRA_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: compliance-scanner-credentials
+                      key: jira-user
+
+                - name: JIRA_SERVER
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-server
+
+                - name: JIRA_PROJECT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-project
+
+                - name: JIRA_AUTH_TYPE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-auth-type
+
+                - name: JIRA_INSTALLATION
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-installation
+
+                - name: JIRA_BOARD
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-board
+
+                - name: JIRA_PRIORITY
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-priority
+
+                - name: JIRA_LABELS
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: jira-labels
+
+                - name: SKIP_DUPLICATES
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: skip-duplicates
+
+                - name: AUTO_CLOSE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: auto-close
+
+                - name: RETRIGGER_FAILED
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: retrigger-failed
+
+                - name: SQUAD_FILTER
+                  valueFrom:
+                    configMapKeyRef:
+                      name: compliance-scanner-config
+                      key: squad-filter
+                      optional: true
+
+              resources:
+                requests:
+                  memory: "512Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "500m"
+
+              volumeMounts:
+                - name: logs
+                  mountPath: /workspace/logs
+                - name: data
+                  mountPath: /workspace/data
+
+          volumes:
+            - name: logs
+              emptyDir: {}
+            - name: data
+              emptyDir: {}
