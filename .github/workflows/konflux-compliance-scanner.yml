@@ -1,0 +1,297 @@
+name: Konflux Compliance Scanner
+
+on:
+  schedule:
+    # Run at 8:00 AM EST (13:00 UTC) and 1:00 PM EST (18:00 UTC), Monday-Friday
+    - cron: '0 13,18 * * 1-5'
+
+  workflow_dispatch:
+    inputs:
+      application:
+        description: 'Application name (e.g., acm-215, mce-29, or "all")'
+        required: false
+        default: 'all'
+      retrigger_failed:
+        description: 'Retrigger failed builds'
+        type: boolean
+        default: false
+      squad_filter:
+        description: 'Filter by squad (optional)'
+        required: false
+
+env:
+  JIRA_SERVER: "https://issues.redhat.com"
+  JIRA_PROJECT: "ACM"
+  JIRA_AUTH_TYPE: "bearer"
+  JIRA_INSTALLATION: "Local"
+  JIRA_BOARD: "None"
+  JIRA_PRIORITY: "Critical"
+  JIRA_LABELS: "konflux,compliance,auto-created"
+  SKIP_DUPLICATES: "true"
+  AUTO_CLOSE: "true"
+
+jobs:
+  compliance-scan:
+    name: Scan ${{ matrix.application }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        application:
+          - acm-215
+          - mce-29
+
+    steps:
+      - name: Check if should run
+        id: should_run
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            APP_INPUT="${{ github.event.inputs.application }}"
+            if [[ "$APP_INPUT" != "all" && "$APP_INPUT" != "${{ matrix.application }}" ]]; then
+              echo "skip=true" >> $GITHUB_OUTPUT
+              echo "Skipping ${{ matrix.application }} (only running $APP_INPUT)"
+            else
+              echo "skip=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install required tools
+        if: steps.should_run.outputs.skip != 'true'
+        run: |
+          echo "Installing yq..."
+          sudo curl -L https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+
+          echo "Installing jira-cli..."
+          JIRA_CLI_VERSION=$(curl -s https://api.github.com/repos/ankitpokhrel/jira-cli/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          curl -LO "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_CLI_VERSION}/jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz"
+          tar -xzf "jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz"
+          sudo mv bin/jira /usr/local/bin/jira
+          sudo chmod +x /usr/local/bin/jira
+          rm -rf "jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz" bin completions man
+
+          echo "Installing skopeo..."
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+          echo "Verifying installations..."
+          kubectl version --client
+          yq --version
+          jira --version
+          skopeo --version
+
+      - name: Clone installer-dev-tools scripts
+        if: steps.should_run.outputs.skip != 'true'
+        run: |
+          echo "Cloning stolostron/installer-dev-tools..."
+          git clone --depth 1 --branch main https://github.com/stolostron/installer-dev-tools.git /tmp/installer-dev-tools
+
+          # Copy required scripts to workspace
+          mkdir -p ${{ github.workspace }}/scripts
+          cp /tmp/installer-dev-tools/scripts/konflux/compliance.sh ${{ github.workspace }}/scripts/
+          cp /tmp/installer-dev-tools/scripts/konflux/create-compliance-jira-issues.sh ${{ github.workspace }}/scripts/
+          cp /tmp/installer-dev-tools/scripts/konflux/component-squad.yaml ${{ github.workspace }}/scripts/
+
+          chmod +x ${{ github.workspace }}/scripts/compliance.sh
+          chmod +x ${{ github.workspace }}/scripts/create-compliance-jira-issues.sh
+
+          rm -rf /tmp/installer-dev-tools
+
+          echo "Scripts copied to workspace"
+          ls -la ${{ github.workspace }}/scripts/
+
+      - name: Setup Konflux cluster authentication
+        if: steps.should_run.outputs.skip != 'true'
+        env:
+          KONFLUX_API_ENDPOINT: ${{ secrets.KONFLUX_API_ENDPOINT }}
+          KONFLUX_API_TOKEN: ${{ secrets.KONFLUX_API_TOKEN }}
+        run: |
+          echo "Setting up Konflux cluster authentication..."
+          echo "API Endpoint: $KONFLUX_API_ENDPOINT"
+
+          # Test connectivity
+          echo "Testing connection to Konflux cluster..."
+          kubectl --server="$KONFLUX_API_ENDPOINT" \
+                  --token="$KONFLUX_API_TOKEN" \
+                  --insecure-skip-tls-verify \
+                  get namespaces > /dev/null 2>&1
+
+          echo "✓ Konflux cluster connection successful"
+
+          # Configure kubectl
+          kubectl config set-cluster konflux \
+            --server="$KONFLUX_API_ENDPOINT" \
+            --insecure-skip-tls-verify=true
+
+          kubectl config set-credentials scanner \
+            --token="$KONFLUX_API_TOKEN"
+
+          kubectl config set-context konflux \
+            --cluster=konflux \
+            --user=scanner
+
+          kubectl config use-context konflux
+
+          echo "✓ kubectl configured for Konflux cluster"
+
+          # Verify access to tenant namespace
+          echo "Verifying access to crt-redhat-acm-tenant namespace..."
+          if kubectl get namespace crt-redhat-acm-tenant > /dev/null 2>&1; then
+            echo "✓ Access to crt-redhat-acm-tenant verified"
+          else
+            echo "WARNING: Cannot access crt-redhat-acm-tenant namespace"
+          fi
+
+      - name: Setup GitHub token
+        if: steps.should_run.outputs.skip != 'true'
+        run: |
+          echo "Setting up GitHub authentication..."
+          mkdir -p ${{ github.workspace }}/data
+          echo "${{ secrets.GITHUB_TOKEN }}" > ${{ github.workspace }}/data/authorization.txt
+          chmod 600 ${{ github.workspace }}/data/authorization.txt
+          echo "✓ GitHub token configured"
+
+      - name: Setup JIRA configuration
+        if: steps.should_run.outputs.skip != 'true'
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER: ${{ secrets.JIRA_USER }}
+        run: |
+          echo "Setting up JIRA CLI configuration..."
+
+          # Create .env file for create-compliance-jira-issues.sh
+          cat > ${{ github.workspace }}/.env <<EOF
+          JIRA_USER=$JIRA_USER
+          JIRA_API_TOKEN=$JIRA_API_TOKEN
+          JIRA_AUTH_TYPE=${{ env.JIRA_AUTH_TYPE }}
+          JIRA_SERVER=${{ env.JIRA_SERVER }}
+          JIRA_INSTALLATION=${{ env.JIRA_INSTALLATION }}
+          JIRA_PROJECT=${{ env.JIRA_PROJECT }}
+          JIRA_BOARD=${{ env.JIRA_BOARD }}
+          EOF
+
+          chmod 600 ${{ github.workspace }}/.env
+          echo "✓ JIRA configuration prepared"
+
+      - name: Run compliance scan
+        if: steps.should_run.outputs.skip != 'true'
+        working-directory: ${{ github.workspace }}/scripts
+        env:
+          SQUAD_FILTER: ${{ github.event.inputs.squad_filter }}
+        run: |
+          echo "=================================================="
+          echo "Running Compliance Scan for ${{ matrix.application }}"
+          echo "=================================================="
+          echo "Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          echo ""
+
+          # Build compliance command
+          COMPLIANCE_CMD="./compliance.sh"
+
+          if [[ "${{ github.event.inputs.retrigger_failed }}" == "true" ]]; then
+            COMPLIANCE_CMD="$COMPLIANCE_CMD --retrigger"
+            echo "Retrigger failed components: yes"
+          fi
+
+          if [[ -n "$SQUAD_FILTER" ]]; then
+            COMPLIANCE_CMD="$COMPLIANCE_CMD --squad=$SQUAD_FILTER"
+            echo "Squad filter: $SQUAD_FILTER"
+          fi
+
+          COMPLIANCE_CMD="$COMPLIANCE_CMD ${{ matrix.application }}"
+
+          # Create output directories
+          mkdir -p ${{ github.workspace }}/data
+          mkdir -p ${{ github.workspace }}/logs
+
+          echo "Running: $COMPLIANCE_CMD"
+          eval "$COMPLIANCE_CMD" 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-compliance-scan.log"
+
+          # Verify CSV was generated
+          CSV_FILE="${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv"
+          if [[ ! -f "$CSV_FILE" ]]; then
+            echo "ERROR: Compliance CSV file not generated: $CSV_FILE"
+            exit 1
+          fi
+
+          echo ""
+          echo "✓ Compliance scan completed"
+          echo "CSV file: $CSV_FILE"
+
+          # Show summary
+          TOTAL_COMPONENTS=$(tail -n +2 "$CSV_FILE" | wc -l | tr -d ' ')
+          echo "Total components scanned: $TOTAL_COMPONENTS"
+
+      - name: Create/Update JIRA issues
+        if: steps.should_run.outputs.skip != 'true'
+        working-directory: ${{ github.workspace }}/scripts
+        run: |
+          echo "=================================================="
+          echo "Creating/Updating JIRA Issues for ${{ matrix.application }}"
+          echo "=================================================="
+          echo ""
+
+          CSV_FILE="${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv"
+          JSON_OUTPUT="${{ github.workspace }}/logs/${{ matrix.application }}-jira-issues.json"
+
+          # Build JIRA command
+          JIRA_CMD="./create-compliance-jira-issues.sh"
+
+          if [[ "${{ env.SKIP_DUPLICATES }}" == "true" ]]; then
+            JIRA_CMD="$JIRA_CMD --skip-duplicates"
+          fi
+
+          if [[ "${{ env.AUTO_CLOSE }}" == "true" ]]; then
+            JIRA_CMD="$JIRA_CMD --auto-close"
+          fi
+
+          if [[ -n "${{ env.JIRA_PRIORITY }}" ]]; then
+            JIRA_CMD="$JIRA_CMD --priority ${{ env.JIRA_PRIORITY }}"
+          fi
+
+          if [[ -n "${{ env.JIRA_LABELS }}" ]]; then
+            JIRA_CMD="$JIRA_CMD --labels ${{ env.JIRA_LABELS }}"
+          fi
+
+          JIRA_CMD="$JIRA_CMD --output-json $JSON_OUTPUT"
+          JIRA_CMD="$JIRA_CMD $CSV_FILE"
+
+          echo "Running: $JIRA_CMD"
+          eval "$JIRA_CMD" 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-jira-creation.log"
+
+          echo ""
+          echo "✓ JIRA issue creation/update completed"
+
+          if [[ -f "$JSON_OUTPUT" ]]; then
+            echo "JSON output: $JSON_OUTPUT"
+          fi
+
+      - name: Upload scan results
+        if: always() && steps.should_run.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-results-${{ matrix.application }}
+          path: |
+            ${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv
+            ${{ github.workspace }}/logs/${{ matrix.application }}-*.log
+            ${{ github.workspace }}/logs/${{ matrix.application }}-*.json
+          retention-days: 30
+
+      - name: Summary
+        if: steps.should_run.outputs.skip != 'true'
+        run: |
+          echo "=================================================="
+          echo "Compliance Scan Completed Successfully"
+          echo "=================================================="
+          echo "Application: ${{ matrix.application }}"
+          echo "Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          echo ""
+          echo "Output files:"
+          echo "  - CSV: data/${{ matrix.application }}-compliance.csv"
+          echo "  - Scan Log: logs/${{ matrix.application }}-compliance-scan.log"
+          echo "  - JIRA Log: logs/${{ matrix.application }}-jira-creation.log"
+          echo "  - JSON: logs/${{ matrix.application }}-jira-issues.json"
+          echo ""
