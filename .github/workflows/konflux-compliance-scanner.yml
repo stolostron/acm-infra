@@ -2,8 +2,8 @@ name: Konflux Compliance Scanner
 
 on:
   schedule:
-    # Run at 8:00 AM EST (13:00 UTC) and 1:00 PM EST (18:00 UTC), Monday-Friday
-    - cron: '0 13,18 * * 1-5'
+    # Run at 8:00 AM EST (13:00 UTC) and 1:00 PM EST (18:00 UTC), every day including weekends
+    - cron: '0 13,18 * * *'
 
   workflow_dispatch:
     inputs:

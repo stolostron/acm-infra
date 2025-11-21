@@ -37,8 +37,8 @@ Add the following secrets:
 The workflow is already configured in [.github/workflows/konflux-compliance-scanner.yml](../../.github/workflows/konflux-compliance-scanner.yml)
 
 It will automatically run:
-- **8:00 AM EST** (13:00 UTC) - Monday to Friday
-- **1:00 PM EST** (18:00 UTC) - Monday to Friday
+- **8:00 AM EST** (13:00 UTC) - Every day (including weekends)
+- **1:00 PM EST** (18:00 UTC) - Every day (including weekends)
 
 ### 3. Manual Testing
 
@@ -80,13 +80,13 @@ To change the schedule, edit the cron expression:
 ```yaml
 on:
   schedule:
-    # Current: 8am & 1pm EST (13:00 & 18:00 UTC), Mon-Fri
-    - cron: '0 13,18 * * 1-5'
+    # Current: 8am & 1pm EST (13:00 & 18:00 UTC), every day
+    - cron: '0 13,18 * * *'
 
     # Examples:
     # Daily at 9am EST:        '0 14 * * *'
     # Every 6 hours:           '0 */6 * * *'
-    # Mon/Wed/Fri at 8am EST:  '0 13 * * 1,3,5'
+    # Mon-Fri only at 8am EST: '0 13 * * 1-5'
 ```
 
 ### JIRA Settings
@@ -107,7 +107,7 @@ env:
 ```
 ┌─────────────────────────────────────────────────────────┐
 │            GitHub Actions Scheduled Workflow             │
-│                 (8am & 1pm EST, Mon-Fri)                │
+│              (8am & 1pm EST, Every Day)                 │
 └────────────────────┬────────────────────────────────────┘
                      │
                      ▼
