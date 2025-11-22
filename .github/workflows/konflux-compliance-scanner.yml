@@ -233,7 +233,7 @@ jobs:
         run: |
           echo "Setting up GitHub authentication..."
           mkdir -p ${{ github.workspace }}/data
-          echo "${{ secrets.GITHUB_TOKEN }}" > ${{ github.workspace }}/data/authorization.txt
+          echo "${{ secrets.GH_PAT }}" > ${{ github.workspace }}/data/authorization.txt
           chmod 600 ${{ github.workspace }}/data/authorization.txt
           echo "✓ GitHub token configured"
 
