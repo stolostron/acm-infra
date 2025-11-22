@@ -39,8 +39,18 @@ jobs:
       fail-fast: false
       matrix:
         application:
-          - acm-215
-          - mce-29
+          - release-acm-211
+          - release-acm-212
+          - release-acm-213
+          - release-acm-214
+          - release-acm-215
+          - release-acm-216
+          - release-mce-26
+          - release-mce-27
+          - release-mce-28
+          - release-mce-29
+          - release-mce-210
+          - release-mce-211
 
     steps:
       - name: Check if should run
@@ -61,15 +71,55 @@ jobs:
       - name: Install required tools
         if: steps.should_run.outputs.skip != 'true'
         run: |
+          # Install kubectl only if not available (for local act testing)
+          if ! command -v kubectl &> /dev/null; then
+            echo "Installing kubectl..."
+            KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+            # Use wget with better retry logic, fallback to curl if wget unavailable
+            if command -v wget &> /dev/null; then
+              wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 --tries=3 \
+                -O kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+            else
+              curl -L --retry 5 --retry-delay 3 --retry-max-time 120 --connect-timeout 30 --max-time 300 \
+                -C - -o kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+            fi
+            sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+            rm -f kubectl
+          else
+            echo "kubectl already installed"
+          fi
+
+          # Install OpenShift CLI (oc)
+          if ! command -v oc &> /dev/null; then
+            echo "Installing OpenShift CLI (oc)..."
+            OC_VERSION="4.17.8"
+            # Use wget with better retry logic, fallback to curl if wget unavailable
+            if command -v wget &> /dev/null; then
+              wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 --tries=3 \
+                -O openshift-client-linux.tar.gz \
+                "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz"
+            else
+              curl -L --retry 5 --retry-delay 3 --retry-max-time 120 --connect-timeout 30 --max-time 300 \
+                -C - -o openshift-client-linux.tar.gz \
+                "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz"
+            fi
+            tar -xzf openshift-client-linux.tar.gz oc
+            sudo install -o root -g root -m 0755 oc /usr/local/bin/oc
+            rm -f openshift-client-linux.tar.gz oc kubectl
+          else
+            echo "oc already installed"
+          fi
+
           echo "Installing yq..."
-          sudo curl -L https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq
+          sudo curl -L --retry 3 --retry-delay 2 --fail https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq
           sudo chmod +x /usr/local/bin/yq
 
           echo "Installing jira-cli..."
-          JIRA_CLI_VERSION=$(curl -s https://api.github.com/repos/ankitpokhrel/jira-cli/releases/latest | jq -r '.tag_name' | sed 's/^v//')
-          curl -LO "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_CLI_VERSION}/jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz"
+          JIRA_CLI_VERSION=$(curl -s --retry 3 --retry-delay 2 https://api.github.com/repos/ankitpokhrel/jira-cli/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          curl -L --retry 3 --retry-delay 2 --fail -o "jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz" "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_CLI_VERSION}/jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz"
           tar -xzf "jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz"
-          sudo mv bin/jira /usr/local/bin/jira
+          # Find the jira binary and move it to /usr/local/bin
+          find . -name "jira" -type f -executable -exec sudo mv {} /usr/local/bin/jira \;
           sudo chmod +x /usr/local/bin/jira
           rm -rf "jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz" bin completions man
 
@@ -79,8 +129,9 @@ jobs:
 
           echo "Verifying installations..."
           kubectl version --client
+          oc version --client
           yq --version
-          jira --version
+          jira version
           skopeo --version
 
       - name: Clone installer-dev-tools scripts
@@ -114,10 +165,15 @@ jobs:
 
           # Test connectivity
           echo "Testing connection to Konflux cluster..."
-          kubectl --server="$KONFLUX_API_ENDPOINT" \
+          if ! kubectl --server="$KONFLUX_API_ENDPOINT" \
                   --token="$KONFLUX_API_TOKEN" \
                   --insecure-skip-tls-verify \
-                  get namespaces > /dev/null 2>&1
+                  get namespaces 2>&1 | head -5; then
+            echo ""
+            echo "❌ Failed to connect to Konflux cluster"
+            echo "Please check KONFLUX_API_ENDPOINT and KONFLUX_API_TOKEN secrets"
+            exit 1
+          fi
 
           echo "✓ Konflux cluster connection successful"
 
@@ -131,18 +187,45 @@ jobs:
 
           kubectl config set-context konflux \
             --cluster=konflux \
-            --user=scanner
+            --user=scanner \
+            --namespace=crt-redhat-acm-tenant
 
           kubectl config use-context konflux
 
           echo "✓ kubectl configured for Konflux cluster"
 
+          # Configure oc (OpenShift CLI) to use the same context
+          # oc shares the same kubeconfig with kubectl
+          oc config set-cluster konflux \
+            --server="$KONFLUX_API_ENDPOINT" \
+            --insecure-skip-tls-verify=true
+
+          oc config set-credentials scanner \
+            --token="$KONFLUX_API_TOKEN"
+
+          oc config set-context konflux \
+            --cluster=konflux \
+            --user=scanner \
+            --namespace=crt-redhat-acm-tenant
+
+          oc config use-context konflux
+
+          echo "✓ oc configured for Konflux cluster"
+
           # Verify access to tenant namespace
           echo "Verifying access to crt-redhat-acm-tenant namespace..."
-          if kubectl get namespace crt-redhat-acm-tenant > /dev/null 2>&1; then
+          if oc get namespace crt-redhat-acm-tenant > /dev/null 2>&1; then
             echo "✓ Access to crt-redhat-acm-tenant verified"
           else
             echo "WARNING: Cannot access crt-redhat-acm-tenant namespace"
+          fi
+
+          # Set current project/namespace for oc
+          echo "Setting current OpenShift project..."
+          if oc project crt-redhat-acm-tenant > /dev/null 2>&1; then
+            echo "✓ Switched to project crt-redhat-acm-tenant"
+          else
+            echo "WARNING: Could not switch to project crt-redhat-acm-tenant"
           fi
 
       - name: Setup GitHub token
@@ -270,7 +353,7 @@ jobs:
           fi
 
       - name: Upload scan results
-        if: always() && steps.should_run.outputs.skip != 'true'
+        if: always() && steps.should_run.outputs.skip != 'true' && env.ACT != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: compliance-results-${{ matrix.application }}

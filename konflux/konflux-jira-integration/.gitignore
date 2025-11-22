@@ -1,0 +1,15 @@
+# act tool local testing environment files
+.env
+.secrets
+
+# act tool cache and temporary files
+.actrc
+act-*.log
+
+# Possible test output files
+*.csv
+scan-results/
+
+# Temporary scripts and data
+tmp/
+temp/
