@@ -324,7 +324,7 @@ If migrating from the Docker/Kubernetes approach:
 .github/workflows/
 └── konflux-compliance-scanner.yml    # GitHub Actions workflow
 
-konflux/konflux-jira-intergration/
+konflux/konflux-jira-integration/
 ├── README-github-actions.md          # This file
 ├── Dockerfile                        # (Legacy - not needed)
 ├── cronjob.yaml                      # (Legacy - not needed)
