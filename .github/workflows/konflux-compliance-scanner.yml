@@ -294,14 +294,11 @@ jobs:
           echo "=== Debug Information ==="
           echo "Current directory: $(pwd)"
           echo "Script location: $(ls -la compliance.sh)"
-          echo "Data directory: $(ls -la ${{ github.workspace }}/data/)"
           echo "Environment variables:"
           echo "  GITHUB_WORKSPACE: ${{ github.workspace }}"
-          echo "  DATA_DIR: ${DATA_DIR:-not set}"
           echo ""
 
-          # Export DATA_DIR for compliance.sh script
-          export DATA_DIR="${{ github.workspace }}/data"
+          # Export GITHUB_TOKEN for compliance.sh script
           export GITHUB_TOKEN="${{ secrets.GH_PAT }}"
 
           echo "Running: $COMPLIANCE_CMD"
@@ -316,31 +313,45 @@ jobs:
           echo ""
           echo "=== Compliance Script Exit Code: $COMPLIANCE_EXIT_CODE ==="
 
-          # Show what files were created in data directory
+          # The compliance.sh script creates CSV in ./data/ relative to its working directory
+          # Since we're running in scripts/, the CSV is at scripts/data/
+          # Move the generated CSV to the workspace data directory
+          SCRIPT_CSV_FILE="./data/${{ matrix.application }}-compliance.csv"
+          WORKSPACE_CSV_FILE="${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv"
+
           echo ""
-          echo "=== Files in data directory after scan ==="
-          ls -lah ${{ github.workspace }}/data/ || echo "Data directory is empty or does not exist"
+          echo "=== Files in script data directory after scan ==="
+          ls -lah ./data/ || echo "Script data directory is empty or does not exist"
           echo ""
 
-          # Verify CSV was generated
-          CSV_FILE="${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv"
-          if [[ ! -f "$CSV_FILE" ]]; then
-            echo "❌ ERROR: Compliance CSV file not generated: $CSV_FILE"
+          # Move CSV file to workspace data directory if it exists
+          if [[ -f "$SCRIPT_CSV_FILE" ]]; then
+            echo "Moving CSV from $SCRIPT_CSV_FILE to $WORKSPACE_CSV_FILE"
+            mv "$SCRIPT_CSV_FILE" "$WORKSPACE_CSV_FILE"
+            echo "✓ CSV file moved successfully"
+          else
+            echo "❌ ERROR: Compliance CSV file not generated at: $SCRIPT_CSV_FILE"
             echo ""
             echo "=== Last 50 lines of scan log ==="
             tail -n 50 "${{ github.workspace }}/logs/${{ matrix.application }}-compliance-scan.log"
             echo ""
-            echo "=== Full data directory listing ==="
-            find ${{ github.workspace }}/data/ -type f -ls 2>/dev/null || echo "No files found in data directory"
+            echo "=== Full script data directory listing ==="
+            find ./data/ -type f -ls 2>/dev/null || echo "No files found in script data directory"
+            exit 1
+          fi
+
+          # Verify CSV was moved successfully
+          if [[ ! -f "$WORKSPACE_CSV_FILE" ]]; then
+            echo "❌ ERROR: Failed to move CSV file to workspace data directory"
             exit 1
           fi
 
           echo ""
           echo "✓ Compliance scan completed"
-          echo "CSV file: $CSV_FILE"
+          echo "CSV file: $WORKSPACE_CSV_FILE"
 
           # Show summary
-          TOTAL_COMPONENTS=$(tail -n +2 "$CSV_FILE" | wc -l | tr -d ' ')
+          TOTAL_COMPONENTS=$(tail -n +2 "$WORKSPACE_CSV_FILE" | wc -l | tr -d ' ')
           echo "Total components scanned: $TOTAL_COMPONENTS"
 
       - name: Create/Update JIRA issues
