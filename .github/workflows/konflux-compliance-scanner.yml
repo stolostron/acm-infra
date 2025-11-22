@@ -290,13 +290,48 @@ jobs:
           mkdir -p ${{ github.workspace }}/data
           mkdir -p ${{ github.workspace }}/logs
 
+          # Enable debug output for better error tracking
+          echo "=== Debug Information ==="
+          echo "Current directory: $(pwd)"
+          echo "Script location: $(ls -la compliance.sh)"
+          echo "Data directory: $(ls -la ${{ github.workspace }}/data/)"
+          echo "Environment variables:"
+          echo "  GITHUB_WORKSPACE: ${{ github.workspace }}"
+          echo "  DATA_DIR: ${DATA_DIR:-not set}"
+          echo ""
+
+          # Export DATA_DIR for compliance.sh script
+          export DATA_DIR="${{ github.workspace }}/data"
+          export GITHUB_TOKEN="${{ secrets.GH_PAT }}"
+
           echo "Running: $COMPLIANCE_CMD"
+          echo ""
+
+          # Run with more verbose output and capture exit code
+          set +e
           eval "$COMPLIANCE_CMD" 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-compliance-scan.log"
+          COMPLIANCE_EXIT_CODE=$?
+          set -e
+
+          echo ""
+          echo "=== Compliance Script Exit Code: $COMPLIANCE_EXIT_CODE ==="
+
+          # Show what files were created in data directory
+          echo ""
+          echo "=== Files in data directory after scan ==="
+          ls -lah ${{ github.workspace }}/data/ || echo "Data directory is empty or does not exist"
+          echo ""
 
           # Verify CSV was generated
           CSV_FILE="${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv"
           if [[ ! -f "$CSV_FILE" ]]; then
-            echo "ERROR: Compliance CSV file not generated: $CSV_FILE"
+            echo "❌ ERROR: Compliance CSV file not generated: $CSV_FILE"
+            echo ""
+            echo "=== Last 50 lines of scan log ==="
+            tail -n 50 "${{ github.workspace }}/logs/${{ matrix.application }}-compliance-scan.log"
+            echo ""
+            echo "=== Full data directory listing ==="
+            find ${{ github.workspace }}/data/ -type f -ls 2>/dev/null || echo "No files found in data directory"
             exit 1
           fi
 
