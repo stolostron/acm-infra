@@ -278,8 +278,9 @@ jobs:
         run: |
           echo "Setting up GitHub authentication..."
           mkdir -p ${{ github.workspace }}/data
-          echo "${{ secrets.GH_PAT }}" > ${{ github.workspace }}/data/authorization.txt
-          chmod 600 ${{ github.workspace }}/data/authorization.txt
+          # Put authorization.txt in scripts directory where compliance.sh expects it
+          echo "${{ secrets.GH_PAT }}" > ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/authorization.txt
+          chmod 600 ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/authorization.txt
           echo "✓ GitHub token configured"
 
       - name: Setup JIRA configuration

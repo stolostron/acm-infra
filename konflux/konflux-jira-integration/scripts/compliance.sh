@@ -233,7 +233,16 @@ github_api_call() {
         debug_echo "[debug] API call to $url returned HTTP $http_code"
 
         # Check for rate limit (403/429)
+        # Only treat as rate limit if we have an error response (not valid data)
         if [[ "$http_code" == "403" ]] || [[ "$http_code" == "429" ]]; then
+            # Check if response has valid data (check_suites or check_runs array exists)
+            has_valid_data=$(echo "$body" | yq -p=json 'has("check_suites") or has("check_runs")' 2>/dev/null)
+            if [[ "$has_valid_data" == "true" ]]; then
+                # Response contains valid data despite 403 - not a rate limit error
+                debug_echo "[debug] Got 403 but response has valid data, treating as success"
+                echo "$body"
+                return 0
+            fi
             if echo "$body" | grep -qi "rate limit\|API rate limit"; then
                 # Fetch detailed rate limit information
                 echo "⚠️  GitHub API rate limit hit" >&3
