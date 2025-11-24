@@ -327,33 +327,77 @@ check_hermetic_builds() {
     hermeticbuilds=true
     
     # Check pathInRepo (first .spec, then fallback to .spec.pipelineSpec)
-    pathinrepo=$(echo "$yaml" | yq ".spec.pipelineRef.params | .[] | select(.name==\"pathInRepo\")")
+    pathinrepo=$(echo "$yaml" | yq ".spec.pipelineRef.params | .[] | select(.name==\"pathInRepo\")" 2>&1)
+    if echo "$pathinrepo" | grep -q "Error:"; then
+        echo "⚠️  Error parsing push YAML for pathInRepo (.spec):" >&3
+        echo "$pathinrepo" >&3
+        echo "Push YAML content (first 300 lines):" >&3
+        echo "$yaml" | head -300 >&3
+        pathinrepo=""
+    fi
     debug_echo "[debug] pathInRepo (push): using .spec = $pathinrepo"
     if [[ -z "$pathinrepo" ]]; then
-        pathinrepo=$(echo "$yaml" | yq ".spec.pipelineSpec.pipelineRef.params | .[] | select(.name==\"pathInRepo\")")
+        pathinrepo=$(echo "$yaml" | yq ".spec.pipelineSpec.pipelineRef.params | .[] | select(.name==\"pathInRepo\")" 2>&1)
+        if echo "$pathinrepo" | grep -q "Error:"; then
+            echo "⚠️  Error parsing push YAML for pathInRepo (.spec.pipelineSpec fallback):" >&3
+            echo "$pathinrepo" >&3
+            pathinrepo=""
+        fi
         debug_echo "[debug] pathInRepo (push): using .spec.pipelineSpec fallback = $pathinrepo"
     fi
-    
-    pullpathinrepo=$(echo "$pull_yaml" | yq ".spec.pipelineRef.params | .[] | select(.name==\"pathInRepo\")")
+
+    pullpathinrepo=$(echo "$pull_yaml" | yq ".spec.pipelineRef.params | .[] | select(.name==\"pathInRepo\")" 2>&1)
+    if echo "$pullpathinrepo" | grep -q "Error:"; then
+        echo "⚠️  Error parsing pull YAML for pathInRepo (.spec):" >&3
+        echo "$pullpathinrepo" >&3
+        echo "Pull YAML content (first 300 lines):" >&3
+        echo "$pull_yaml" | head -300 >&3
+        pullpathinrepo=""
+    fi
     debug_echo "[debug] pathInRepo (pull): using .spec = $pullpathinrepo"
     if [[ -z "$pullpathinrepo" ]]; then
-        pullpathinrepo=$(echo "$pull_yaml" | yq ".spec.pipelineSpec.pipelineRef.params | .[] | select(.name==\"pathInRepo\")")
+        pullpathinrepo=$(echo "$pull_yaml" | yq ".spec.pipelineSpec.pipelineRef.params | .[] | select(.name==\"pathInRepo\")" 2>&1)
+        if echo "$pullpathinrepo" | grep -q "Error:"; then
+            echo "⚠️  Error parsing pull YAML for pathInRepo (.spec.pipelineSpec fallback):" >&3
+            echo "$pullpathinrepo" >&3
+            pullpathinrepo=""
+        fi
         debug_echo "[debug] pathInRepo (pull): using .spec.pipelineSpec fallback = $pullpathinrepo"
     fi
 
     if [[ -z "$pathinrepo" || -z "$pullpathinrepo" ]]; then
         # Check build-source-image (first .spec.params.value, then fallback to .spec.pipelineSpec.params.default)
-        buildsourceimage=$(echo "$yaml" | yq ".spec.params | .[] | select(.name==\"build-source-image\") | .value")
+        buildsourceimage=$(echo "$yaml" | yq ".spec.params | .[] | select(.name==\"build-source-image\") | .value" 2>&1)
+        if echo "$buildsourceimage" | grep -q "Error:"; then
+            echo "⚠️  Error parsing push YAML for build-source-image:" >&3
+            echo "$buildsourceimage" >&3
+            buildsourceimage=""
+        fi
         debug_echo "[debug] build-source-image (push): using .spec.params.value = $buildsourceimage"
         if [[ -z "$buildsourceimage" ]]; then
-            buildsourceimage=$(echo "$yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"build-source-image\") | .default")
+            buildsourceimage=$(echo "$yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"build-source-image\") | .default" 2>&1)
+            if echo "$buildsourceimage" | grep -q "Error:"; then
+                echo "⚠️  Error parsing push YAML for build-source-image (fallback):" >&3
+                echo "$buildsourceimage" >&3
+                buildsourceimage=""
+            fi
             debug_echo "[debug] build-source-image (push): using .spec.pipelineSpec.params.default = $buildsourceimage"
         fi
-        
-        pull_bsi=$(echo "$pull_yaml" | yq ".spec.params | .[] | select(.name==\"build-source-image\") | .value")
+
+        pull_bsi=$(echo "$pull_yaml" | yq ".spec.params | .[] | select(.name==\"build-source-image\") | .value" 2>&1)
+        if echo "$pull_bsi" | grep -q "Error:"; then
+            echo "⚠️  Error parsing pull YAML for build-source-image:" >&3
+            echo "$pull_bsi" >&3
+            pull_bsi=""
+        fi
         debug_echo "[debug] build-source-image (pull): using .spec.params.value = $pull_bsi"
         if [[ -z "$pull_bsi" ]]; then
-            pull_bsi=$(echo "$pull_yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"build-source-image\") | .default")
+            pull_bsi=$(echo "$pull_yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"build-source-image\") | .default" 2>&1)
+            if echo "$pull_bsi" | grep -q "Error:"; then
+                echo "⚠️  Error parsing pull YAML for build-source-image (fallback):" >&3
+                echo "$pull_bsi" >&3
+                pull_bsi=""
+            fi
             debug_echo "[debug] build-source-image (pull): using .spec.pipelineSpec.params.default = $pull_bsi"
         fi
         
@@ -362,17 +406,37 @@ check_hermetic_builds() {
         fi
 
         # Check hermetic (first .spec.params.value, then fallback to .spec.pipelineSpec.params.default)
-        hermetic=$(echo "$yaml" | yq ".spec.params | .[] | select(.name==\"hermetic\") | .value")
+        hermetic=$(echo "$yaml" | yq ".spec.params | .[] | select(.name==\"hermetic\") | .value" 2>&1)
+        if echo "$hermetic" | grep -q "Error:"; then
+            echo "⚠️  Error parsing push YAML for hermetic:" >&3
+            echo "$hermetic" >&3
+            hermetic=""
+        fi
         debug_echo "[debug] hermetic (push): using .spec.params.value = $hermetic"
         if [[ -z "$hermetic" ]]; then
-            hermetic=$(echo "$yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"hermetic\") | .default")
+            hermetic=$(echo "$yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"hermetic\") | .default" 2>&1)
+            if echo "$hermetic" | grep -q "Error:"; then
+                echo "⚠️  Error parsing push YAML for hermetic (fallback):" >&3
+                echo "$hermetic" >&3
+                hermetic=""
+            fi
             debug_echo "[debug] hermetic (push): using .spec.pipelineSpec.params.default = $hermetic"
         fi
-        
-        pull_hermetic=$(echo "$pull_yaml" | yq ".spec.params | .[] | select(.name==\"hermetic\") | .value")
+
+        pull_hermetic=$(echo "$pull_yaml" | yq ".spec.params | .[] | select(.name==\"hermetic\") | .value" 2>&1)
+        if echo "$pull_hermetic" | grep -q "Error:"; then
+            echo "⚠️  Error parsing pull YAML for hermetic:" >&3
+            echo "$pull_hermetic" >&3
+            pull_hermetic=""
+        fi
         debug_echo "[debug] hermetic (pull): using .spec.params.value = $pull_hermetic"
         if [[ -z "$pull_hermetic" ]]; then
-            pull_hermetic=$(echo "$pull_yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"hermetic\") | .default")
+            pull_hermetic=$(echo "$pull_yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"hermetic\") | .default" 2>&1)
+            if echo "$pull_hermetic" | grep -q "Error:"; then
+                echo "⚠️  Error parsing pull YAML for hermetic (fallback):" >&3
+                echo "$pull_hermetic" >&3
+                pull_hermetic=""
+            fi
             debug_echo "[debug] hermetic (pull): using .spec.pipelineSpec.params.default = $pull_hermetic"
         fi
         
@@ -389,17 +453,37 @@ check_hermetic_builds() {
     fi
     
     # Check prefetch-input (first .spec.params.value, then fallback to .spec.pipelineSpec.params.default)
-    prefetch=$(echo "$yaml" | yq ".spec.params | .[] | select(.name==\"prefetch-input\") | .value")
+    prefetch=$(echo "$yaml" | yq ".spec.params | .[] | select(.name==\"prefetch-input\") | .value" 2>&1)
+    if echo "$prefetch" | grep -q "Error:"; then
+        echo "⚠️  Error parsing push YAML for prefetch-input:" >&3
+        echo "$prefetch" >&3
+        prefetch=""
+    fi
     debug_echo "[debug] prefetch-input (push): using .spec.params.value = $prefetch"
     if [[ -z "$prefetch" ]]; then
-        prefetch=$(echo "$yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"prefetch-input\") | .default")
+        prefetch=$(echo "$yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"prefetch-input\") | .default" 2>&1)
+        if echo "$prefetch" | grep -q "Error:"; then
+            echo "⚠️  Error parsing push YAML for prefetch-input (fallback):" >&3
+            echo "$prefetch" >&3
+            prefetch=""
+        fi
         debug_echo "[debug] prefetch-input (push): using .spec.pipelineSpec.params.default = $prefetch"
     fi
-    
-    pull_prefetch=$(echo "$pull_yaml" | yq ".spec.params | .[] | select(.name==\"prefetch-input\") | .value")
+
+    pull_prefetch=$(echo "$pull_yaml" | yq ".spec.params | .[] | select(.name==\"prefetch-input\") | .value" 2>&1)
+    if echo "$pull_prefetch" | grep -q "Error:"; then
+        echo "⚠️  Error parsing pull YAML for prefetch-input:" >&3
+        echo "$pull_prefetch" >&3
+        pull_prefetch=""
+    fi
     debug_echo "[debug] prefetch-input (pull): using .spec.params.value = $pull_prefetch"
     if [[ -z "$pull_prefetch" ]]; then
-        pull_prefetch=$(echo "$pull_yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"prefetch-input\") | .default")
+        pull_prefetch=$(echo "$pull_yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"prefetch-input\") | .default" 2>&1)
+        if echo "$pull_prefetch" | grep -q "Error:"; then
+            echo "⚠️  Error parsing pull YAML for prefetch-input (fallback):" >&3
+            echo "$pull_prefetch" >&3
+            pull_prefetch=""
+        fi
         debug_echo "[debug] prefetch-input (pull): using .spec.pipelineSpec.params.default = $pull_prefetch"
     fi
     
@@ -427,7 +511,14 @@ fetch_check_runs() {
 
     # Try check-suites first (more reliable for Konflux)
     check_suites_response=$(github_api_call "https://api.github.com/repos/$org/$repo/commits/$branch/check-suites")
-    suite_id=$(echo "$check_suites_response" | yq -p=json ".check_suites[] | select(.app.name == \"Red Hat Konflux\") | .id" | head -1)
+    suite_id=$(echo "$check_suites_response" | yq -p=json ".check_suites[] | select(.app.name == \"Red Hat Konflux\") | .id" 2>&1 | head -1)
+    if echo "$suite_id" | grep -q "Error:"; then
+        echo "⚠️  Error parsing check-suites response:" >&3
+        echo "$suite_id" >&3
+        echo "Check-suites JSON response (first 500 lines):" >&3
+        echo "$check_suites_response" | head -500 >&3
+        suite_id=""
+    fi
 
     if [[ -n "$suite_id" ]]; then
         # Use suite method for Konflux - fetch ALL check runs at once
@@ -452,11 +543,28 @@ check_enterprise_contract() {
     ecname="enterprise-contract-$application / $line"
 
     # Extract EC check run from pre-fetched data
-    check_run_data=$(echo "$all_check_runs" | yq -p=json ".check_runs[] | select(.name==\"*enterprise-contract*$line\")")
+    check_run_data=$(echo "$all_check_runs" | yq -p=json ".check_runs[] | select(.name==\"*enterprise-contract*$line\")" 2>&1)
+    if echo "$check_run_data" | grep -q "Error:"; then
+        echo "⚠️  Error parsing check runs JSON for EC:" >&3
+        echo "$check_run_data" >&3
+        echo "Check runs JSON response (first 500 lines):" >&3
+        echo "$all_check_runs" | head -500 >&3
+        check_run_data=""
+    fi
     debug_echo "[debug] EC check_run_data: $check_run_data"
-    ec=$(echo "$check_run_data" | yq ".conclusion")
+    ec=$(echo "$check_run_data" | yq ".conclusion" 2>&1)
+    if echo "$ec" | grep -q "Error:"; then
+        echo "⚠️  Error parsing EC conclusion:" >&3
+        echo "$ec" >&3
+        ec=""
+    fi
     # Extract PipelineRun URL from output.text (embedded in HTML link)
-    output_text=$(echo "$check_run_data" | yq ".output.text")
+    output_text=$(echo "$check_run_data" | yq ".output.text" 2>&1)
+    if echo "$output_text" | grep -q "Error:"; then
+        echo "⚠️  Error parsing EC output.text:" >&3
+        echo "$output_text" >&3
+        output_text=""
+    fi
     ec_url=$(echo "$output_text" | sed -n 's/.*href="\(https:\/\/konflux-ui[^"]*pipelinerun\/[^"]*\)".*/\1/p' | head -1)
     debug_echo "[debug] EC ec=$ec, ec_url=$ec_url"
 
@@ -484,10 +592,27 @@ check_component_on_push() {
     pushname="Red Hat Konflux / $line-on-push"
 
     # Extract on-push check run from pre-fetched data
-    check_run_data=$(echo "$all_check_runs" | yq -p=json ".check_runs[] | select(.name==\"Red Hat Konflux / $line-on-push\")")
+    check_run_data=$(echo "$all_check_runs" | yq -p=json ".check_runs[] | select(.name==\"Red Hat Konflux / $line-on-push\")" 2>&1)
+    if echo "$check_run_data" | grep -q "Error:"; then
+        echo "⚠️  Error parsing check runs JSON for on-push:" >&3
+        echo "$check_run_data" >&3
+        echo "Check runs JSON response (first 500 lines):" >&3
+        echo "$all_check_runs" | head -500 >&3
+        check_run_data=""
+    fi
     debug_echo "[debug] Push check_run_data: $check_run_data"
-    push_status=$(echo "$check_run_data" | yq ".conclusion")
-    push_url=$(echo "$check_run_data" | yq ".details_url")
+    push_status=$(echo "$check_run_data" | yq ".conclusion" 2>&1)
+    if echo "$push_status" | grep -q "Error:"; then
+        echo "⚠️  Error parsing push status conclusion:" >&3
+        echo "$push_status" >&3
+        push_status=""
+    fi
+    push_url=$(echo "$check_run_data" | yq ".details_url" 2>&1)
+    if echo "$push_url" | grep -q "Error:"; then
+        echo "⚠️  Error parsing push details_url:" >&3
+        echo "$push_url" >&3
+        push_url=""
+    fi
     debug_echo "[debug] Push push_status=$push_status, push_url=$push_url"
 
     if [[ -n "$push_status" ]] && ! echo "$push_status" | grep -v "^success$" > /dev/null; then
@@ -503,13 +628,25 @@ check_component_on_push() {
 check_multiarch_support() {
     local yaml="$1"
     local repo="$2"
-    
+
     # Check build-platforms (first .spec.params.value, then fallback to .spec.pipelineSpec.params.default)
-    platforms_value=$(echo "$yaml" | yq ".spec.params | .[] | select(.name==\"build-platforms\") | .value | .[]")
-    if [[ -z "$platforms_value" ]]; then
-        platforms_value=$(echo "$yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"build-platforms\") | .default | .[]")
+    platforms_value=$(echo "$yaml" | yq ".spec.params | .[] | select(.name==\"build-platforms\") | .value | .[]" 2>&1)
+    if echo "$platforms_value" | grep -q "Error:"; then
+        echo "⚠️  Error parsing YAML for build-platforms (.spec.params):" >&3
+        echo "$platforms_value" >&3
+        echo "YAML content (first 300 lines):" >&3
+        echo "$yaml" | head -300 >&3
+        platforms_value=""
     fi
-    
+    if [[ -z "$platforms_value" ]]; then
+        platforms_value=$(echo "$yaml" | yq ".spec.pipelineSpec.params | .[] | select(.name==\"build-platforms\") | .default | .[]" 2>&1)
+        if echo "$platforms_value" | grep -q "Error:"; then
+            echo "⚠️  Error parsing YAML for build-platforms (.spec.pipelineSpec fallback):" >&3
+            echo "$platforms_value" >&3
+            platforms_value=""
+        fi
+    fi
+
     platforms=$(echo "$platforms_value" | wc -l | tr -d ' \t\n')
     if  [[ $platforms != 4 ]]; then
         echo "🟥 $repo Multiarch: FALSE" >&3
