@@ -232,17 +232,30 @@ github_api_call() {
         if [[ "$http_code" == "403" ]] || [[ "$http_code" == "429" ]]; then
             if echo "$body" | grep -qi "rate limit\|API rate limit"; then
                 # Fetch detailed rate limit information
-                echo "⚠️  GitHub API rate limit hit unexpectedly (call #$API_CALL_COUNT)" >&3
+                echo "⚠️  GitHub API rate limit hit unexpectedly" >&3
+                echo "   Request URL: $url" >&3
+                echo "   HTTP Code: $http_code" >&3
+                echo "   API Call Count (this window): $API_CALL_COUNT" >&3
+                echo "   Window started: $(date -r $API_WINDOW_START '+%Y-%m-%d %H:%M:%S')" >&3
+                local time_in_window=$(($(date +%s) - API_WINDOW_START))
+                echo "   Time in current window: ${time_in_window}s" >&3
                 echo "" >&3
 
                 if [[ -n "$authorization" ]]; then
                     rate_limit_response=$(curl -s -H "$authorization" "https://api.github.com/rate_limit" 2>&1)
 
                     if [ $? -eq 0 ]; then
+                        # Try to parse rate limit details
                         core_limit=$(echo "$rate_limit_response" | yq -p=json '.rate.limit' 2>/dev/null)
                         core_remaining=$(echo "$rate_limit_response" | yq -p=json '.rate.remaining' 2>/dev/null)
                         core_used=$(echo "$rate_limit_response" | yq -p=json '.rate.used' 2>/dev/null)
                         reset_timestamp=$(echo "$rate_limit_response" | yq -p=json '.rate.reset' 2>/dev/null)
+
+                        # Filter out "null" values
+                        [[ "$core_limit" == "null" ]] && core_limit=""
+                        [[ "$core_remaining" == "null" ]] && core_remaining=""
+                        [[ "$core_used" == "null" ]] && core_used=""
+                        [[ "$reset_timestamp" == "null" ]] && reset_timestamp=""
 
                         if [[ -n "$core_limit" && -n "$core_remaining" && -n "$core_used" ]]; then
                             current_time=$(date +%s)
@@ -264,8 +277,21 @@ github_api_call() {
                                 echo "   Please run the script again after $(date -r $reset_timestamp '+%Y-%m-%d %H:%M:%S')" >&3
                                 return 1
                             fi
+                        else
+                            # Failed to parse rate limit details - show raw response for debugging
+                            echo "   ⚠️  Failed to parse rate limit details" >&3
+                            echo "   Raw response from GitHub API:" >&3
+                            echo "$rate_limit_response" | head -20 >&3
+                            echo "" >&3
                         fi
+                    else
+                        echo "   ⚠️  Failed to fetch rate limit information from GitHub API" >&3
+                        echo "" >&3
                     fi
+                else
+                    echo "   ⚠️  No GitHub authorization token configured" >&3
+                    echo "   Cannot fetch detailed rate limit information" >&3
+                    echo "" >&3
                 fi
 
                 if [ $attempt -lt $max_retries ]; then
