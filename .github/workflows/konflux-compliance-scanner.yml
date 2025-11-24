@@ -305,10 +305,11 @@ jobs:
           echo ""
 
           # Run with more verbose output and capture exit code
-          set +e
+          # Use pipefail to ensure we catch failures in the pipeline
+          set -o pipefail
           eval "$COMPLIANCE_CMD" 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-compliance-scan.log"
           COMPLIANCE_EXIT_CODE=$?
-          set -e
+          set +o pipefail
 
           echo ""
           echo "=== Compliance Script Exit Code: $COMPLIANCE_EXIT_CODE ==="
@@ -397,13 +398,25 @@ jobs:
           JIRA_CMD="$JIRA_CMD $CSV_FILE"
 
           echo "Running: $JIRA_CMD"
+
+          # Use pipefail to ensure we catch failures in the pipeline
+          set -o pipefail
           eval "$JIRA_CMD" 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-jira-creation.log"
+          JIRA_EXIT_CODE=$?
+          set +o pipefail
 
           echo ""
-          echo "✓ JIRA issue creation/update completed"
 
-          if [[ -f "$JSON_OUTPUT" ]]; then
-            echo "JSON output: $JSON_OUTPUT"
+          if [[ $JIRA_EXIT_CODE -eq 0 ]]; then
+            echo "✓ JIRA issue creation/update completed successfully"
+
+            if [[ -f "$JSON_OUTPUT" ]]; then
+              echo "JSON output: $JSON_OUTPUT"
+            fi
+          else
+            echo "❌ JIRA issue creation/update failed with exit code: $JIRA_EXIT_CODE"
+            echo "Please check the log file for details: logs/${{ matrix.application }}-jira-creation.log"
+            exit $JIRA_EXIT_CODE
           fi
 
       - name: Upload scan results
