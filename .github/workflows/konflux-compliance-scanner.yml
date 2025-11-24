@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       application:
-        description: 'Application name (e.g., acm-215, mce-29, or "all")'
+        description: 'Application name(s) - single (e.g., acm-215), multiple comma-separated (e.g., acm-214,acm-215,mce-29), or "all"'
         required: false
         default: 'all'
       retrigger_failed:
@@ -63,11 +63,40 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             APP_INPUT="${{ github.event.inputs.application }}"
-            if [[ "$APP_INPUT" != "all" && "$APP_INPUT" != "${{ matrix.application }}" ]]; then
-              echo "skip=true" >> $GITHUB_OUTPUT
-              echo "Skipping ${{ matrix.application }} (only running $APP_INPUT)"
-            else
+            MATRIX_APP="${{ matrix.application }}"
+
+            # If "all", run everything
+            if [[ "$APP_INPUT" == "all" ]]; then
               echo "skip=false" >> $GITHUB_OUTPUT
+              echo "Running $MATRIX_APP (all applications selected)"
+            # If input contains comma, treat as list
+            elif [[ "$APP_INPUT" == *","* ]]; then
+              # Convert comma-separated list to array and check if current matrix app is in the list
+              IFS=',' read -ra APP_LIST <<< "$APP_INPUT"
+              FOUND=false
+              for app in "${APP_LIST[@]}"; do
+                # Trim whitespace
+                app=$(echo "$app" | xargs)
+                if [[ "$app" == "$MATRIX_APP" ]]; then
+                  FOUND=true
+                  break
+                fi
+              done
+
+              if [[ "$FOUND" == "true" ]]; then
+                echo "skip=false" >> $GITHUB_OUTPUT
+                echo "Running $MATRIX_APP (found in list: $APP_INPUT)"
+              else
+                echo "skip=true" >> $GITHUB_OUTPUT
+                echo "Skipping $MATRIX_APP (not in list: $APP_INPUT)"
+              fi
+            # Single application name
+            elif [[ "$APP_INPUT" == "$MATRIX_APP" ]]; then
+              echo "skip=false" >> $GITHUB_OUTPUT
+              echo "Running $MATRIX_APP (exact match)"
+            else
+              echo "skip=true" >> $GITHUB_OUTPUT
+              echo "Skipping $MATRIX_APP (only running $APP_INPUT)"
             fi
           else
             echo "skip=false" >> $GITHUB_OUTPUT
