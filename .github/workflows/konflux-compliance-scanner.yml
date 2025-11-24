@@ -143,6 +143,7 @@ jobs:
         if: steps.should_run.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.GH_PAT }}
           submodules: 'recursive'
 
       - name: Setup scripts
