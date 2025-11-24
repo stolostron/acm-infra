@@ -402,6 +402,7 @@ jobs:
 
       - name: Create/Update JIRA issues
         if: steps.should_run.outputs.skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.create_jira_issues == 'true')
+        continue-on-error: true
         working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
         env:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
@@ -440,6 +441,7 @@ jobs:
           fi
 
           JIRA_CMD="$JIRA_CMD --output-json $JSON_OUTPUT"
+          JIRA_CMD="$JIRA_CMD --continue-on-error"
           JIRA_CMD="$JIRA_CMD $CSV_FILE"
 
           echo "Running: $JIRA_CMD"
@@ -459,9 +461,9 @@ jobs:
               echo "JSON output: $JSON_OUTPUT"
             fi
           else
-            echo "❌ JIRA issue creation/update failed with exit code: $JIRA_EXIT_CODE"
+            echo "⚠ JIRA issue creation/update completed with some errors (exit code: $JIRA_EXIT_CODE)"
             echo "Please check the log file for details: logs/${{ matrix.application }}-jira-creation.log"
-            exit $JIRA_EXIT_CODE
+            echo "Note: Workflow will continue despite errors"
           fi
 
       - name: Upload scan results

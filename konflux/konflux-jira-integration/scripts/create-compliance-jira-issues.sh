@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
-
 # ==============================================================================
 # Script: create-compliance-jira-issues.sh
 # Description: Create JIRA issues for non-compliant Konflux components
 # ==============================================================================
+
+# Note: set -euo pipefail is applied conditionally in main() based on --continue-on-error flag
 
 # ==============================================================================
 # CONFIGURATION AND CONSTANTS
@@ -58,6 +58,7 @@ AUTO_CLOSE=false
 OUTPUT_JSON=""
 COMPLIANCE_FILES=()
 DEBUG=false
+CONTINUE_ON_ERROR=false
 
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1199,6 +1200,7 @@ OPTIONS:
     --skip-duplicates        Skip creating issues if similar ones already exist
     --auto-close             Auto-close existing issues for components that are now compliant
     --output-json FILE       Save created issues to JSON file
+    --continue-on-error      Continue processing remaining components even if some fail
     --debug                  Enable debug output (shows jira-cli command in dry-run mode)
     -h, --help               Show this help message
 
@@ -1324,6 +1326,10 @@ parse_arguments() {
                 OUTPUT_JSON="$2"
                 shift 2
                 ;;
+            --continue-on-error)
+                CONTINUE_ON_ERROR=true
+                shift
+                ;;
             --debug)
                 DEBUG=true
                 shift
@@ -1421,8 +1427,16 @@ process_compliance_csv() {
         if is_non_compliant "$promotion_status" "$hermetic_status" "$ec_status" "$multiarch_status" "$push_status" "$promoted_time"; then
             info "Processing: $component_name"
 
-            issue_output=$(create_jira_issue "$component_name" "$scan_time" "$promoted_time" "$promotion_status" "$hermetic_status" "$ec_status" "$multiarch_status" "$push_status" "$push_pipelinerun_url" "$ec_pipelinerun_url")
-            create_exit_code=$?
+            # Use a subshell to capture output and errors
+            if [[ "$CONTINUE_ON_ERROR" == true ]]; then
+                # Continue on error mode: catch failures but don't exit
+                issue_output=$(create_jira_issue "$component_name" "$scan_time" "$promoted_time" "$promotion_status" "$hermetic_status" "$ec_status" "$multiarch_status" "$push_status" "$push_pipelinerun_url" "$ec_pipelinerun_url" 2>&1) || true
+                create_exit_code=$?
+            else
+                # Original behavior: fail on error
+                issue_output=$(create_jira_issue "$component_name" "$scan_time" "$promoted_time" "$promotion_status" "$hermetic_status" "$ec_status" "$multiarch_status" "$push_status" "$push_pipelinerun_url" "$ec_pipelinerun_url")
+                create_exit_code=$?
+            fi
 
             if [[ $create_exit_code -eq 0 ]]; then
                 issue_key=$(echo "$issue_output" | tail -n 1 | xargs)
@@ -1446,6 +1460,12 @@ process_compliance_csv() {
                 fi
             else
                 failed_count=$((failed_count + 1))
+                if [[ "$CONTINUE_ON_ERROR" == true ]]; then
+                    warn "Failed to create/update JIRA issue for $component_name (continuing...)"
+                    if [[ -n "$OUTPUT_JSON" ]]; then
+                        created_issues_json+=("{\"component\": \"$component_name\", \"status\": \"failed\", \"error\": \"Issue creation failed\"}")
+                    fi
+                fi
             fi
         else
             success "$component_name is compliant - skipping"
@@ -1608,6 +1628,15 @@ main() {
     # Parse command line arguments
     parse_arguments "$@"
 
+    # Set strict error handling unless continue-on-error is enabled
+    if [[ "$CONTINUE_ON_ERROR" != true ]]; then
+        set -euo pipefail
+    else
+        # In continue-on-error mode, only set -u (error on undefined variables)
+        # Don't use -e (exit on error) or -o pipefail (exit on pipeline errors)
+        set -u
+    fi
+
     # Check dependencies
     check_dependencies
     check_jira_cli
@@ -1654,6 +1683,22 @@ main() {
 
     # Print final summary if multiple files were processed
     print_final_summary
+
+    # Exit with appropriate code
+    # In continue-on-error mode, exit with 0 if at least some issues were processed
+    # In normal mode, exit with non-zero if there were failures
+    if [[ "$CONTINUE_ON_ERROR" == true ]]; then
+        if [[ $GLOBAL_FAILED_COUNT -gt 0 ]]; then
+            echo "" >&2
+            warn "Script completed with $GLOBAL_FAILED_COUNT failures (continue-on-error mode)"
+        fi
+        exit 0
+    else
+        if [[ $GLOBAL_FAILED_COUNT -gt 0 ]]; then
+            exit 1
+        fi
+        exit 0
+    fi
 }
 
 # Run main function
