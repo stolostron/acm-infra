@@ -142,11 +142,14 @@ jobs:
       - name: Checkout repository
         if: steps.should_run.outputs.skip != 'true'
         uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
 
       - name: Setup scripts
         if: steps.should_run.outputs.skip != 'true'
         run: |
           echo "Using local scripts from konflux/konflux-jira-integration/scripts/"
+          echo ""
 
           # Verify scripts exist
           if [[ ! -f "${{ github.workspace }}/konflux/konflux-jira-integration/scripts/compliance.sh" ]]; then
@@ -159,13 +162,41 @@ jobs:
             exit 1
           fi
 
-          if [[ ! -f "${{ github.workspace }}/konflux/konflux-jira-integration/scripts/component-squad.yaml" ]]; then
-            echo "❌ ERROR: component-squad.yaml not found"
+          echo "✓ Required scripts found"
+          echo ""
+
+          # Verify component registry configuration
+          # Primary: new centralized registry from acm-config submodule
+          # Fallback: old component-squad.yaml
+          NEW_REGISTRY="${{ github.workspace }}/acm-config/product/component-registry.yaml"
+          OLD_REGISTRY="${{ github.workspace }}/konflux/konflux-jira-integration/scripts/component-squad.yaml"
+
+          if [[ -f "$NEW_REGISTRY" ]]; then
+            echo "✓ Using new component registry: acm-config/product/component-registry.yaml"
+            COMPONENT_COUNT=$(yq '.components | length' "$NEW_REGISTRY")
+            echo "  Components registered: $COMPONENT_COUNT"
+          elif [[ -f "$OLD_REGISTRY" ]]; then
+            echo "⚠ Using legacy component-squad.yaml (new registry not found)"
+            echo "  Note: Please ensure acm-config submodule is initialized"
+          else
+            echo "❌ ERROR: No component registry found"
+            echo "  Checked: $NEW_REGISTRY"
+            echo "  Checked: $OLD_REGISTRY"
             exit 1
           fi
 
-          echo "✓ All required scripts found"
+          echo ""
+          echo "✓ Configuration validated"
+          echo ""
+          echo "=== Scripts directory ==="
           ls -la ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/
+          echo ""
+          echo "=== acm-config submodule status ==="
+          if [[ -d "${{ github.workspace }}/acm-config" ]]; then
+            ls -la ${{ github.workspace }}/acm-config/product/ || echo "  product/ directory not found"
+          else
+            echo "  acm-config submodule not initialized"
+          fi
 
       - name: Setup Konflux cluster authentication
         if: steps.should_run.outputs.skip != 'true'

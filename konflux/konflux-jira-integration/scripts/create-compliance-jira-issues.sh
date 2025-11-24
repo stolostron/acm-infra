@@ -408,30 +408,50 @@ get_compliance_labels() {
 # COMPONENT MAPPING FUNCTIONS
 # ==============================================================================
 
-# Get all JIRA component names for a component (handles multi-squad components)
+# Get all JIRA component names for a component
 # Args: component_name
 # Returns: JIRA component names (one per line)
+# Note: Now uses component-registry.yaml from acm-config submodule
 get_component_squads() {
     local component_name="$1"
-    local config_file="$SCRIPT_DIR/component-squad.yaml"
+    # Use component-registry.yaml from acm-config submodule
+    local config_file="$SCRIPT_DIR/../../../acm-config/product/component-registry.yaml"
 
     if [[ ! -f "$config_file" ]]; then
-        echo ""
-        return
+        # Fallback to old location if new one doesn't exist
+        config_file="$SCRIPT_DIR/component-squad.yaml"
+        if [[ ! -f "$config_file" ]]; then
+            echo ""
+            return
+        fi
     fi
 
     # Strip version suffix (e.g., -210, -215, -27, -29) from component name
     local base_component_name=$(echo "$component_name" | sed 's/-[0-9][0-9]*$//')
 
-    # Search through all squads to find which ones contain this component
-    local jira_components=$(yq ".squads | to_entries | .[] | select(.value.components[] == \"$component_name\") | .value[\"jira-component\"]" "$config_file" 2>/dev/null)
+    # Determine which config file format we're using
+    if [[ "$config_file" == *"component-registry.yaml" ]]; then
+        # New format: flat component list with konflux_component field
+        local jira_component=$(yq ".components[] | select(.konflux_component == \"$component_name\") | .jira_component" "$config_file" 2>/dev/null)
 
-    if [[ -z "$jira_components" && "$base_component_name" != "$component_name" ]]; then
-        jira_components=$(yq ".squads | to_entries | .[] | select(.value.components[] == \"$base_component_name\") | .value[\"jira-component\"]" "$config_file" 2>/dev/null)
+        # Try base name if no exact match found
+        if [[ -z "$jira_component" && "$base_component_name" != "$component_name" ]]; then
+            jira_component=$(yq ".components[] | select(.konflux_component == \"$base_component_name\") | .jira_component" "$config_file" 2>/dev/null)
+        fi
+
+        # Filter out empty/null values
+        echo "$jira_component" | grep -v '^$' | grep -v '^null$'
+    else
+        # Old format: squad-based hierarchy
+        local jira_components=$(yq ".squads | to_entries | .[] | select(.value.components[] == \"$component_name\") | .value[\"jira-component\"]" "$config_file" 2>/dev/null)
+
+        if [[ -z "$jira_components" && "$base_component_name" != "$component_name" ]]; then
+            jira_components=$(yq ".squads | to_entries | .[] | select(.value.components[] == \"$base_component_name\") | .value[\"jira-component\"]" "$config_file" 2>/dev/null)
+        fi
+
+        # Filter out empty/null values
+        echo "$jira_components" | grep -v '^$' | grep -v '^null$'
     fi
-
-    # Filter out empty/null values
-    echo "$jira_components" | grep -v '^$' | grep -v '^null$'
 }
 
 # ==============================================================================
@@ -1183,9 +1203,10 @@ OPTIONS:
     -h, --help               Show this help message
 
 NOTE:
-    The script automatically sets the JIRA Component/s field based on the squad mapping
-    in component-squad.yaml. Each component is mapped to its jira-component value (e.g., "Server Foundation",
-    "Installer", "GRC", "HyperShift", etc.). You can override this by using the --component option.
+    The script automatically sets the JIRA Component/s field based on the component registry
+    in acm-config/product/component-registry.yaml. Each component is mapped to its jira_component
+    value (e.g., "Server Foundation", "Installer", "GRC", "HyperShift", etc.).
+    You can override this by using the --component option.
 
 ENVIRONMENT VARIABLES:
     Required (for automatic jira-cli initialization):
