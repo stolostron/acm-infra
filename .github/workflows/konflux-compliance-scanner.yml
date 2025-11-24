@@ -37,6 +37,7 @@ jobs:
 
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         application:
           - acm-211
