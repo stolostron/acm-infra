@@ -357,6 +357,14 @@ jobs:
       - name: Create/Update JIRA issues
         if: steps.should_run.outputs.skip != 'true'
         working-directory: ${{ github.workspace }}/scripts
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER: ${{ secrets.JIRA_USER }}
+          JIRA_AUTH_TYPE: ${{ env.JIRA_AUTH_TYPE }}
+          JIRA_SERVER: ${{ env.JIRA_SERVER }}
+          JIRA_INSTALLATION: ${{ env.JIRA_INSTALLATION }}
+          JIRA_PROJECT: ${{ env.JIRA_PROJECT }}
+          JIRA_BOARD: ${{ env.JIRA_BOARD }}
         run: |
           echo "=================================================="
           echo "Creating/Updating JIRA Issues for ${{ matrix.application }}"
