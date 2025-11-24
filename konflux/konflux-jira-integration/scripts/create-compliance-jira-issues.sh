@@ -412,47 +412,30 @@ get_compliance_labels() {
 # Get all JIRA component names for a component
 # Args: component_name
 # Returns: JIRA component names (one per line)
-# Note: Now uses component-registry.yaml from acm-config submodule
+# Note: Uses component-registry.yaml from acm-config submodule
 get_component_squads() {
     local component_name="$1"
     # Use component-registry.yaml from acm-config submodule
     local config_file="$SCRIPT_DIR/../../../acm-config/product/component-registry.yaml"
 
     if [[ ! -f "$config_file" ]]; then
-        # Fallback to old location if new one doesn't exist
-        config_file="$SCRIPT_DIR/component-squad.yaml"
-        if [[ ! -f "$config_file" ]]; then
-            echo ""
-            return
-        fi
+        echo ""
+        return
     fi
 
     # Strip version suffix (e.g., -210, -215, -27, -29) from component name
     local base_component_name=$(echo "$component_name" | sed 's/-[0-9][0-9]*$//')
 
-    # Determine which config file format we're using
-    if [[ "$config_file" == *"component-registry.yaml" ]]; then
-        # New format: flat component list with konflux_component field
-        local jira_component=$(yq ".components[] | select(.konflux_component == \"$component_name\") | .jira_component" "$config_file" 2>/dev/null)
+    # Query by konflux_component field
+    local jira_component=$(yq ".components[] | select(.konflux_component == \"$component_name\") | .jira_component" "$config_file" 2>/dev/null)
 
-        # Try base name if no exact match found
-        if [[ -z "$jira_component" && "$base_component_name" != "$component_name" ]]; then
-            jira_component=$(yq ".components[] | select(.konflux_component == \"$base_component_name\") | .jira_component" "$config_file" 2>/dev/null)
-        fi
-
-        # Filter out empty/null values
-        echo "$jira_component" | grep -v '^$' | grep -v '^null$'
-    else
-        # Old format: squad-based hierarchy
-        local jira_components=$(yq ".squads | to_entries | .[] | select(.value.components[] == \"$component_name\") | .value[\"jira-component\"]" "$config_file" 2>/dev/null)
-
-        if [[ -z "$jira_components" && "$base_component_name" != "$component_name" ]]; then
-            jira_components=$(yq ".squads | to_entries | .[] | select(.value.components[] == \"$base_component_name\") | .value[\"jira-component\"]" "$config_file" 2>/dev/null)
-        fi
-
-        # Filter out empty/null values
-        echo "$jira_components" | grep -v '^$' | grep -v '^null$'
+    # Try base name if no exact match found
+    if [[ -z "$jira_component" && "$base_component_name" != "$component_name" ]]; then
+        jira_component=$(yq ".components[] | select(.konflux_component == \"$base_component_name\") | .jira_component" "$config_file" 2>/dev/null)
     fi
+
+    # Filter out empty/null values
+    echo "$jira_component" | grep -v '^$' | grep -v '^null$'
 }
 
 # ==============================================================================
@@ -1194,7 +1177,7 @@ OPTIONS:
     --project PROJECT        JIRA project key (default: from JIRA_PROJECT env var or "ACM")
     --issue-type TYPE        JIRA issue type (default: "Bug")
     --priority PRIORITY      JIRA priority (default: "Critical")
-    --component COMPONENT    JIRA component field (optional, overrides auto-detection from component-squad.yaml)
+    --component COMPONENT    JIRA component field (optional, overrides auto-detection from component-registry.yaml)
     --labels LABELS          Comma-separated labels (default: "konflux,compliance,auto-created")
     --dry-run                Show what would be created without actually creating issues
     --skip-duplicates        Skip creating issues if similar ones already exist

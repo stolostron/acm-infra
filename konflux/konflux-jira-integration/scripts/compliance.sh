@@ -105,74 +105,50 @@ get_squad_components() {
     local squad_key="$1"
     # Get the directory where this script is located
     local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    # Use component-registry.yaml from acm-config submodule (new format)
+    # Use component-registry.yaml from acm-config submodule
     local config_file="$script_dir/../../../acm-config/product/component-registry.yaml"
 
     if [[ ! -f "$config_file" ]]; then
-        # Fallback to old location if new one doesn't exist
-        config_file="$script_dir/component-squad.yaml"
-        if [[ ! -f "$config_file" ]]; then
-            echo "Error: No configuration file found" >&3
-            echo "Tried: $script_dir/../../../acm-config/product/component-registry.yaml" >&3
-            echo "Tried: $script_dir/component-squad.yaml" >&3
-            echo "INVALID_SQUAD"
-            exit 1
-        fi
+        echo "Error: Component registry not found" >&3
+        echo "Expected: $config_file" >&3
+        echo "" >&3
+        echo "Please ensure the acm-config submodule is properly initialized:" >&3
+        echo "  git submodule update --init --recursive" >&3
+        echo "INVALID_SQUAD"
+        exit 1
     fi
 
     debug_echo "[debug] Squad Key: $squad_key"
     debug_echo "[debug] Config File: $config_file"
 
-    # Determine which config file format we're using
-    if [[ "$config_file" == *"component-registry.yaml" ]]; then
-        # New format: flat component list with squad field
-        # Need to handle case-insensitive matching for squad names
-        # Convert squad_key from kebab-case to Title Case for matching
-        # e.g., "server-foundation" -> "Server Foundation"
-        local squad_name=$(echo "$squad_key" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2));}1')
-        debug_echo "[debug] Squad Name (normalized): $squad_name"
+    # Convert squad_key from kebab-case to Title Case for matching
+    # e.g., "server-foundation" -> "Server Foundation"
+    local squad_name=$(echo "$squad_key" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2));}1')
+    debug_echo "[debug] Squad Name (normalized): $squad_name"
 
-        # Query components by squad field
-        local components=$(yq ".components[] | select(.squad == \"$squad_name\") | .konflux_component" "$config_file" 2>/dev/null)
+    # Query components by squad field
+    local components=$(yq ".components[] | select(.squad == \"$squad_name\") | .konflux_component" "$config_file" 2>/dev/null)
 
-        # If no exact match, try case-insensitive search
-        if [[ -z "$components" ]]; then
-            debug_echo "[debug] No exact match, trying case-insensitive search"
-            # Get all unique squad values for error message
-            local available_squads=$(yq '.components[].squad' "$config_file" 2>/dev/null | sort -u | grep -v '^null$')
+    # If no exact match, show available squads
+    if [[ -z "$components" ]]; then
+        debug_echo "[debug] No components found for squad: $squad_name"
+        # Get all unique squad values for error message
+        local available_squads=$(yq '.components[].squad' "$config_file" 2>/dev/null | sort -u | grep -v '^null$')
 
-            echo "Error: No components found for squad '$squad_key' (normalized: '$squad_name')" >&3
-            echo "" >&3
-            echo "Available squads:" >&3
-            echo "$available_squads" | while read -r squad; do
-                echo "  - $squad" >&3
-            done
-            echo "" >&3
-            echo "Hint: Use kebab-case format (e.g., 'server-foundation' for 'Server Foundation')" >&3
-            echo "INVALID_SQUAD"
-            exit 1
-        fi
-
-        debug_echo "[debug] Components from component-registry.yaml"
-        debug_echo "$components"
-        echo "$components"
-    else
-        # Old format: squad-based hierarchy
-        local components=$(yq ".squads.\"${squad_key}\".components[]" "$config_file" 2>/dev/null)
-
-        if [[ -z "$components" ]]; then
-            echo "Error: No components found for squad '$squad_key' in $config_file" >&3
-            echo "" >&3
-            echo "Available squads:" >&3
-            echo $(yq '.squads | to_entries | .[] | .key + " (" + .value.name + ")"' "$config_file") >&3
-            echo "INVALID_SQUAD"
-            exit 1
-        fi
-
-        debug_echo "[debug] Components from component-squad.yaml"
-        debug_echo "$components"
-        echo "$components"
+        echo "Error: No components found for squad '$squad_key' (normalized: '$squad_name')" >&3
+        echo "" >&3
+        echo "Available squads:" >&3
+        echo "$available_squads" | while read -r squad; do
+            echo "  - $squad" >&3
+        done
+        echo "" >&3
+        echo "Hint: Use kebab-case format (e.g., 'server-foundation' for 'Server Foundation')" >&3
+        echo "INVALID_SQUAD"
+        exit 1
     fi
+
+    debug_echo "[debug] Components found: $(echo "$components" | wc -l | tr -d ' ')"
+    echo "$components"
 }
 
 # Function to get repository URL from component registry
