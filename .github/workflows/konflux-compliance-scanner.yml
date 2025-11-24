@@ -15,6 +15,10 @@ on:
         description: 'Retrigger failed builds'
         type: boolean
         default: false
+      create_jira_issues:
+        description: 'Create JIRA issues for compliance failures'
+        type: boolean
+        default: true
       squad_filter:
         description: 'Filter by squad (optional)'
         required: false
@@ -357,7 +361,7 @@ jobs:
           echo "Total components scanned: $TOTAL_COMPONENTS"
 
       - name: Create/Update JIRA issues
-        if: steps.should_run.outputs.skip != 'true'
+        if: steps.should_run.outputs.skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.create_jira_issues == 'true')
         working-directory: ${{ github.workspace }}/scripts
         env:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
