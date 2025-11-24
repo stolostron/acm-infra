@@ -1,0 +1,3 @@
+[submodule "acm-config"]
+	path = acm-config
+	url = https://github.com/stolostron/acm-config
