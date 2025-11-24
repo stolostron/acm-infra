@@ -105,30 +105,97 @@ get_squad_components() {
     local squad_key="$1"
     # Get the directory where this script is located
     local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local config_file="$script_dir/component-squad.yaml"
+    # Use component-registry.yaml from acm-config submodule (new format)
+    local config_file="$script_dir/../../../acm-config/product/component-registry.yaml"
 
     if [[ ! -f "$config_file" ]]; then
-        echo "Error: $config_file not found"
-        exit 1
+        # Fallback to old location if new one doesn't exist
+        config_file="$script_dir/component-squad.yaml"
+        if [[ ! -f "$config_file" ]]; then
+            echo "Error: No configuration file found" >&3
+            echo "Tried: $script_dir/../../../acm-config/product/component-registry.yaml" >&3
+            echo "Tried: $script_dir/component-squad.yaml" >&3
+            echo "INVALID_SQUAD"
+            exit 1
+        fi
     fi
 
     debug_echo "[debug] Squad Key: $squad_key"
+    debug_echo "[debug] Config File: $config_file"
 
-    # Parse the YAML file and extract component names for the specified squad
-    local components=$(yq ".squads.\"${squad_key}\".components[]" "$config_file" 2>/dev/null)
+    # Determine which config file format we're using
+    if [[ "$config_file" == *"component-registry.yaml" ]]; then
+        # New format: flat component list with squad field
+        # Need to handle case-insensitive matching for squad names
+        # Convert squad_key from kebab-case to Title Case for matching
+        # e.g., "server-foundation" -> "Server Foundation"
+        local squad_name=$(echo "$squad_key" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2));}1')
+        debug_echo "[debug] Squad Name (normalized): $squad_name"
 
-    if [[ -z "$components" ]]; then
-        echo "Error: No components found for squad '$squad_key' in $config_file" >&3
-        echo "" >&3
-        echo "Available squads:" >&3
-        echo $(yq '.squads | to_entries | .[] | .key + " (" + .value.name + ")"' "$config_file") >&3
-        echo "INVALID_SQUAD"
-        exit 1
+        # Query components by squad field
+        local components=$(yq ".components[] | select(.squad == \"$squad_name\") | .konflux_component" "$config_file" 2>/dev/null)
+
+        # If no exact match, try case-insensitive search
+        if [[ -z "$components" ]]; then
+            debug_echo "[debug] No exact match, trying case-insensitive search"
+            # Get all unique squad values for error message
+            local available_squads=$(yq '.components[].squad' "$config_file" 2>/dev/null | sort -u | grep -v '^null$')
+
+            echo "Error: No components found for squad '$squad_key' (normalized: '$squad_name')" >&3
+            echo "" >&3
+            echo "Available squads:" >&3
+            echo "$available_squads" | while read -r squad; do
+                echo "  - $squad" >&3
+            done
+            echo "" >&3
+            echo "Hint: Use kebab-case format (e.g., 'server-foundation' for 'Server Foundation')" >&3
+            echo "INVALID_SQUAD"
+            exit 1
+        fi
+
+        debug_echo "[debug] Components from component-registry.yaml"
+        debug_echo "$components"
+        echo "$components"
+    else
+        # Old format: squad-based hierarchy
+        local components=$(yq ".squads.\"${squad_key}\".components[]" "$config_file" 2>/dev/null)
+
+        if [[ -z "$components" ]]; then
+            echo "Error: No components found for squad '$squad_key' in $config_file" >&3
+            echo "" >&3
+            echo "Available squads:" >&3
+            echo $(yq '.squads | to_entries | .[] | .key + " (" + .value.name + ")"' "$config_file") >&3
+            echo "INVALID_SQUAD"
+            exit 1
+        fi
+
+        debug_echo "[debug] Components from component-squad.yaml"
+        debug_echo "$components"
+        echo "$components"
+    fi
+}
+
+# Function to get repository URL from component registry
+get_component_repository() {
+    local component_name="$1"
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local config_file="$script_dir/../../../acm-config/product/component-registry.yaml"
+
+    # Return empty if config file doesn't exist
+    if [[ ! -f "$config_file" ]]; then
+        echo ""
+        return
     fi
 
-    debug_echo "[debug] Components"
-    debug_echo "$components"
-    echo "$components"
+    # Query repository by konflux_component field
+    local repository=$(yq ".components[] | select(.konflux_component == \"$component_name\") | .repository" "$config_file" 2>/dev/null)
+
+    # Filter out empty/null values
+    if [[ -n "$repository" && "$repository" != "null" ]]; then
+        echo "$repository"
+    else
+        echo ""
+    fi
 }
 
 echo "Checking for Github auth token"
@@ -720,6 +787,12 @@ for line in $components; do
     debug_echo "[debug] Push: $push\n[debug] Pull: $pull" # debug
 
     echo "--- $line : $org/$repo : $branch ---"
+
+    # Get repository URL from component registry (if available)
+    registry_repo=$(get_component_repository "$line")
+    if [[ -n "$registry_repo" ]]; then
+        echo "    Repository: $registry_repo"
+    fi
     yaml=$(curl -Ls -w "%{http_code}" $push)
     http_code_push="${yaml: -3}"
     yaml="${yaml%???}"
