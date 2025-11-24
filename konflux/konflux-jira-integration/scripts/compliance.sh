@@ -191,8 +191,8 @@ github_api_call() {
     local current_time=$(date +%s)
     local time_since_last_call=$((current_time - LAST_API_CALL_TIME))
     # Rate limiting for sequential execution (max-parallel: 1 in workflow):
-    # 2 seconds = max 1800 calls/hour (64% below 5000 limit, very safe and stable)
-    local min_delay_between_calls=2
+    # 5 seconds = max 720 calls/hour (85.6% below 5000 limit, leaves headroom for other operations)
+    local min_delay_between_calls=5
 
     if [[ $time_since_last_call -lt $min_delay_between_calls ]]; then
         local sleep_time=$((min_delay_between_calls - time_since_last_call))
@@ -231,8 +231,42 @@ github_api_call() {
         # Check for rate limit (403/429)
         if [[ "$http_code" == "403" ]] || [[ "$http_code" == "429" ]]; then
             if echo "$body" | grep -qi "rate limit\|API rate limit"; then
-                # Extract rate limit info from headers if available
+                # Fetch detailed rate limit information
                 echo "⚠️  GitHub API rate limit hit unexpectedly (call #$API_CALL_COUNT)" >&3
+                echo "" >&3
+
+                if [[ -n "$authorization" ]]; then
+                    rate_limit_response=$(curl -s -H "$authorization" "https://api.github.com/rate_limit" 2>&1)
+
+                    if [ $? -eq 0 ]; then
+                        core_limit=$(echo "$rate_limit_response" | yq -p=json '.rate.limit' 2>/dev/null)
+                        core_remaining=$(echo "$rate_limit_response" | yq -p=json '.rate.remaining' 2>/dev/null)
+                        core_used=$(echo "$rate_limit_response" | yq -p=json '.rate.used' 2>/dev/null)
+                        reset_timestamp=$(echo "$rate_limit_response" | yq -p=json '.rate.reset' 2>/dev/null)
+
+                        if [[ -n "$core_limit" && -n "$core_remaining" && -n "$core_used" ]]; then
+                            current_time=$(date +%s)
+                            time_until_reset=$((reset_timestamp - current_time))
+                            minutes_until_reset=$((time_until_reset / 60))
+                            usage_percent=$((core_used * 100 / core_limit))
+
+                            echo "   📊 GitHub API Rate Limit Details:" >&3
+                            echo "      Limit:     $core_limit requests/hour" >&3
+                            echo "      Used:      $core_used (${usage_percent}%)" >&3
+                            echo "      Remaining: $core_remaining" >&3
+                            echo "      Resets in: ${minutes_until_reset} minutes (at $(date -r $reset_timestamp '+%Y-%m-%d %H:%M:%S'))" >&3
+                            echo "" >&3
+
+                            # If rate limit is truly exhausted (very few remaining), don't retry
+                            if [[ $core_remaining -lt 10 ]]; then
+                                echo "❌ Rate limit exhausted (only $core_remaining requests remaining)" >&3
+                                echo "   Retrying won't help - need to wait for rate limit reset" >&3
+                                echo "   Please run the script again after $(date -r $reset_timestamp '+%Y-%m-%d %H:%M:%S')" >&3
+                                return 1
+                            fi
+                        fi
+                    fi
+                fi
 
                 if [ $attempt -lt $max_retries ]; then
                     echo "   Retrying in ${retry_delay}s (attempt $attempt/$max_retries)..." >&3
