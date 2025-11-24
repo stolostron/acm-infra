@@ -139,25 +139,33 @@ jobs:
           jira version
           skopeo --version
 
-      - name: Clone installer-dev-tools scripts
+      - name: Checkout repository
+        if: steps.should_run.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup scripts
         if: steps.should_run.outputs.skip != 'true'
         run: |
-          echo "Cloning stolostron/installer-dev-tools..."
-          git clone --depth 1 --branch main https://github.com/stolostron/installer-dev-tools.git /tmp/installer-dev-tools
+          echo "Using local scripts from konflux/konflux-jira-integration/scripts/"
 
-          # Copy required scripts to workspace
-          mkdir -p ${{ github.workspace }}/scripts
-          cp /tmp/installer-dev-tools/scripts/konflux/compliance.sh ${{ github.workspace }}/scripts/
-          cp /tmp/installer-dev-tools/scripts/konflux/create-compliance-jira-issues.sh ${{ github.workspace }}/scripts/
-          cp /tmp/installer-dev-tools/scripts/konflux/component-squad.yaml ${{ github.workspace }}/scripts/
+          # Verify scripts exist
+          if [[ ! -f "${{ github.workspace }}/konflux/konflux-jira-integration/scripts/compliance.sh" ]]; then
+            echo "❌ ERROR: compliance.sh not found"
+            exit 1
+          fi
 
-          chmod +x ${{ github.workspace }}/scripts/compliance.sh
-          chmod +x ${{ github.workspace }}/scripts/create-compliance-jira-issues.sh
+          if [[ ! -f "${{ github.workspace }}/konflux/konflux-jira-integration/scripts/create-compliance-jira-issues.sh" ]]; then
+            echo "❌ ERROR: create-compliance-jira-issues.sh not found"
+            exit 1
+          fi
 
-          rm -rf /tmp/installer-dev-tools
+          if [[ ! -f "${{ github.workspace }}/konflux/konflux-jira-integration/scripts/component-squad.yaml" ]]; then
+            echo "❌ ERROR: component-squad.yaml not found"
+            exit 1
+          fi
 
-          echo "Scripts copied to workspace"
-          ls -la ${{ github.workspace }}/scripts/
+          echo "✓ All required scripts found"
+          ls -la ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/
 
       - name: Setup Konflux cluster authentication
         if: steps.should_run.outputs.skip != 'true'
@@ -266,7 +274,7 @@ jobs:
 
       - name: Run compliance scan
         if: steps.should_run.outputs.skip != 'true'
-        working-directory: ${{ github.workspace }}/scripts
+        working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
         env:
           SQUAD_FILTER: ${{ github.event.inputs.squad_filter }}
         run: |
@@ -362,7 +370,7 @@ jobs:
 
       - name: Create/Update JIRA issues
         if: steps.should_run.outputs.skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.create_jira_issues == 'true')
-        working-directory: ${{ github.workspace }}/scripts
+        working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
         env:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_USER: ${{ secrets.JIRA_USER }}
