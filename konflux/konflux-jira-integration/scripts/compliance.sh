@@ -174,71 +174,28 @@ if [ -f "authorization.txt" ]; then
 	echo ""
 fi
 
-# Track API call count and implement rate limiting
-API_CALL_COUNT=0
-API_CALL_LIMIT=4500  # Leave buffer below GitHub's 5000/hour limit
-API_WINDOW_START=$(date +%s)
-LAST_API_CALL_TIME=0
-
-# GitHub API call with proactive rate limiting and retry logic
+# GitHub API call with simple rate limiting and retry logic
 github_api_call() {
     local url="$1"
     local max_retries=3
     local retry_delay=2
     local attempt=1
 
-    # Proactive rate limiting: enforce minimum delay between API calls
-    local current_time=$(date +%s)
-    local time_since_last_call=$((current_time - LAST_API_CALL_TIME))
-    # Rate limiting for sequential execution (max-parallel: 1 in workflow):
-    # 5 seconds = max 720 calls/hour (85.6% below 5000 limit, leaves headroom for other operations)
-    local min_delay_between_calls=5
-
-    if [[ $time_since_last_call -lt $min_delay_between_calls ]]; then
-        local sleep_time=$((min_delay_between_calls - time_since_last_call))
-        debug_echo "[debug] Rate limiting: sleeping ${sleep_time}s before API call"
-        sleep $sleep_time
-    fi
-
-    # Check if we're approaching the rate limit (reset every hour)
-    local time_since_window_start=$((current_time - API_WINDOW_START))
-    if [[ $time_since_window_start -ge 3600 ]]; then
-        # Reset counter every hour
-        API_CALL_COUNT=0
-        API_WINDOW_START=$current_time
-        debug_echo "[debug] Rate limit window reset. API calls in last hour: 0"
-    fi
-
-    # Check if we're at the limit
-    if [[ $API_CALL_COUNT -ge $API_CALL_LIMIT ]]; then
-        local wait_time=$((3600 - time_since_window_start + 10))  # Wait until window resets + 10s buffer
-        echo "⚠️  Approaching GitHub API rate limit ($API_CALL_COUNT/$API_CALL_LIMIT calls). Waiting ${wait_time}s..." >&3
-        sleep $wait_time
-        API_CALL_COUNT=0
-        API_WINDOW_START=$(date +%s)
-    fi
-
     while [ $attempt -le $max_retries ]; do
         # Make the API call
-        LAST_API_CALL_TIME=$(date +%s)
         response=$(curl -LsH "$authorization" -w "\n%{http_code}" "$url" 2>&1)
         http_code=$(echo "$response" | tail -n 1)
         body=$(echo "$response" | sed '$d')
 
-        API_CALL_COUNT=$((API_CALL_COUNT + 1))
-        debug_echo "[debug] API call #$API_CALL_COUNT: $url returned HTTP $http_code"
+        debug_echo "[debug] API call to $url returned HTTP $http_code"
 
         # Check for rate limit (403/429)
         if [[ "$http_code" == "403" ]] || [[ "$http_code" == "429" ]]; then
             if echo "$body" | grep -qi "rate limit\|API rate limit"; then
                 # Fetch detailed rate limit information
-                echo "⚠️  GitHub API rate limit hit unexpectedly" >&3
+                echo "⚠️  GitHub API rate limit hit" >&3
                 echo "   Request URL: $url" >&3
                 echo "   HTTP Code: $http_code" >&3
-                echo "   API Call Count (this window): $API_CALL_COUNT" >&3
-                echo "   Window started: $(date -r $API_WINDOW_START '+%Y-%m-%d %H:%M:%S')" >&3
-                local time_in_window=$(($(date +%s) - API_WINDOW_START))
-                echo "   Time in current window: ${time_in_window}s" >&3
                 echo "" >&3
 
                 if [[ -n "$authorization" ]]; then
@@ -592,6 +549,9 @@ else
     components=$(oc get components | grep $application | awk '{print $1}')
 fi
 
+# Component processing delay (in seconds) to avoid GitHub API rate limits
+COMPONENT_DELAY=5
+
 component_count=0
 total_components=$(echo "$components" | wc -l | tr -d ' ')
 
@@ -603,6 +563,12 @@ for line in $components; do
 
     component_count=$((component_count + 1))
     echo "Processing component $component_count/$total_components: $line" >&3
+
+    # Add delay between components (except for the first one)
+    if [[ $component_count -gt 1 ]]; then
+        debug_echo "[debug] Waiting ${COMPONENT_DELAY}s before processing next component..."
+        sleep $COMPONENT_DELAY
+    fi
 
     data=$(check_promoted "$line" "$skopeo_mac_args")
 
@@ -693,4 +659,4 @@ for line in $components; do
 done
 
 echo "" >&3
-echo "✅ Compliance scan completed. Total GitHub API calls: $API_CALL_COUNT" >&3
+echo "✅ Compliance scan completed" >&3
