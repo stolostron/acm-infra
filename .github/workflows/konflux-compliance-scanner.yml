@@ -162,8 +162,8 @@ jobs:
               -o /tmp/jira.tar.gz \
               "https://github.com/ankitpokhrel/jira-cli/releases/download/v${{ env.JIRA_CLI_VERSION }}/jira_${{ env.JIRA_CLI_VERSION }}_linux_x86_64.tar.gz"
             tar -xzf /tmp/jira.tar.gz -C /tmp
-            # Find the jira binary and move it to TOOL_DIR
-            find /tmp -name "jira" -type f -executable -exec mv {} "$TOOL_DIR/jira" \; -quit
+            # Find the jira binary in the extracted directory and move it to TOOL_DIR
+            find /tmp/jira_* -name "jira" -type f -executable -exec mv {} "$TOOL_DIR/jira" \; -quit 2>/dev/null
             chmod +x "$TOOL_DIR/jira"
             rm -rf /tmp/jira.tar.gz /tmp/jira_*
 
