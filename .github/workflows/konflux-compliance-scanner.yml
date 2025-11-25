@@ -247,16 +247,16 @@ jobs:
             echo "  acm-config submodule not initialized"
           fi
 
-      - name: Setup Konflux cluster authentication
+      - name: Validate Konflux API token
         if: steps.should_run.outputs.skip != 'true'
         env:
           KONFLUX_API_ENDPOINT: ${{ secrets.KONFLUX_API_ENDPOINT }}
           KONFLUX_API_TOKEN: ${{ secrets.KONFLUX_API_TOKEN }}
         run: |
-          echo "Setting up Konflux cluster authentication..."
+          echo "Validating Konflux API token..."
           echo "API Endpoint: $KONFLUX_API_ENDPOINT"
 
-          # Test connectivity
+          # Test token validity with a simple API call
           echo "Testing connection to Konflux cluster..."
           if ! kubectl --server="$KONFLUX_API_ENDPOINT" \
                   --token="$KONFLUX_API_TOKEN" \
@@ -264,11 +264,36 @@ jobs:
                   get namespaces 2>&1 | head -5; then
             echo ""
             echo "❌ Failed to connect to Konflux cluster"
-            echo "Please check KONFLUX_API_ENDPOINT and KONFLUX_API_TOKEN secrets"
+            echo "Possible reasons:"
+            echo "  - KONFLUX_API_TOKEN has expired"
+            echo "  - KONFLUX_API_TOKEN has insufficient permissions"
+            echo "  - KONFLUX_API_ENDPOINT is incorrect or unreachable"
+            echo ""
+            echo "Please verify and update the KONFLUX_API_TOKEN secret"
             exit 1
           fi
 
-          echo "✓ Konflux cluster connection successful"
+          # Verify we can perform actual operations (not just authenticate)
+          echo "Verifying token permissions..."
+          if ! kubectl --server="$KONFLUX_API_ENDPOINT" \
+                  --token="$KONFLUX_API_TOKEN" \
+                  --insecure-skip-tls-verify \
+                  auth can-i get namespaces > /dev/null 2>&1; then
+            echo ""
+            echo "❌ Token authenticated but lacks required permissions"
+            echo "Please ensure the token has sufficient cluster access"
+            exit 1
+          fi
+
+          echo "✓ Konflux API token is valid and has required permissions"
+
+      - name: Setup Konflux cluster authentication
+        if: steps.should_run.outputs.skip != 'true'
+        env:
+          KONFLUX_API_ENDPOINT: ${{ secrets.KONFLUX_API_ENDPOINT }}
+          KONFLUX_API_TOKEN: ${{ secrets.KONFLUX_API_TOKEN }}
+        run: |
+          echo "Setting up Konflux cluster authentication..."
 
           # Configure kubectl
           kubectl config set-cluster konflux \
@@ -321,6 +346,59 @@ jobs:
             echo "WARNING: Could not switch to project crt-redhat-acm-tenant"
           fi
 
+      - name: Validate GitHub token
+        if: steps.should_run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          echo "Validating GitHub token..."
+
+          # Test token validity with GitHub API
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/user)
+
+          if [[ "$HTTP_STATUS" == "200" ]]; then
+            echo "✓ GitHub token is valid"
+
+            # Get token info for debugging
+            USER_INFO=$(curl -s \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/user | jq -r '.login // "unknown"')
+            echo "  Authenticated as: $USER_INFO"
+
+          elif [[ "$HTTP_STATUS" == "401" ]]; then
+            echo ""
+            echo "❌ GitHub token is invalid or expired"
+            echo "HTTP Status: $HTTP_STATUS (Unauthorized)"
+            echo ""
+            echo "Please update the GH_PAT secret with a valid token"
+            echo "Generate a new token at: https://github.com/settings/tokens"
+            exit 1
+
+          elif [[ "$HTTP_STATUS" == "403" ]]; then
+            echo ""
+            echo "❌ GitHub token has insufficient permissions or rate limit exceeded"
+            echo "HTTP Status: $HTTP_STATUS (Forbidden)"
+            echo ""
+            echo "Please check:"
+            echo "  - Token has required scopes (repo, workflow)"
+            echo "  - API rate limit status"
+            exit 1
+
+          else
+            echo ""
+            echo "❌ Unexpected response from GitHub API"
+            echo "HTTP Status: $HTTP_STATUS"
+            echo ""
+            echo "Please verify:"
+            echo "  - GitHub API is accessible"
+            echo "  - GH_PAT secret is correctly configured"
+            exit 1
+          fi
+
       - name: Setup GitHub token
         if: steps.should_run.outputs.skip != 'true'
         run: |
@@ -330,6 +408,58 @@ jobs:
           echo "${{ secrets.GH_PAT }}" > ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/authorization.txt
           chmod 600 ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/authorization.txt
           echo "✓ GitHub token configured"
+
+      - name: Validate JIRA token
+        if: steps.should_run.outputs.skip != 'true'
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER: ${{ secrets.JIRA_USER }}
+        run: |
+          echo "Validating JIRA API token..."
+
+          # Test JIRA token validity
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -u "$JIRA_USER:$JIRA_API_TOKEN" \
+            -H "Accept: application/json" \
+            "${{ env.JIRA_SERVER }}/rest/api/2/myself")
+
+          if [[ "$HTTP_STATUS" == "200" ]]; then
+            echo "✓ JIRA token is valid"
+
+            # Get user info for verification
+            USER_INFO=$(curl -s \
+              -u "$JIRA_USER:$JIRA_API_TOKEN" \
+              -H "Accept: application/json" \
+              "${{ env.JIRA_SERVER }}/rest/api/2/myself" | jq -r '.displayName // .name // "unknown"')
+            echo "  Authenticated as: $USER_INFO"
+
+          elif [[ "$HTTP_STATUS" == "401" ]]; then
+            echo ""
+            echo "❌ JIRA token is invalid or expired"
+            echo "HTTP Status: $HTTP_STATUS (Unauthorized)"
+            echo ""
+            echo "Please update the JIRA_API_TOKEN secret with a valid token"
+            echo "Generate a new token at: ${{ env.JIRA_SERVER }}/secure/ViewProfile.jspa?selectedTab=com.atlassian.pats.pats-plugin:jira-user-personal-access-tokens"
+            exit 1
+
+          elif [[ "$HTTP_STATUS" == "403" ]]; then
+            echo ""
+            echo "❌ JIRA token has insufficient permissions"
+            echo "HTTP Status: $HTTP_STATUS (Forbidden)"
+            echo ""
+            echo "Please ensure the token has required permissions to access JIRA"
+            exit 1
+
+          else
+            echo ""
+            echo "❌ Unexpected response from JIRA API"
+            echo "HTTP Status: $HTTP_STATUS"
+            echo ""
+            echo "Please verify:"
+            echo "  - JIRA server is accessible: ${{ env.JIRA_SERVER }}"
+            echo "  - JIRA_USER and JIRA_API_TOKEN secrets are correctly configured"
+            exit 1
+          fi
 
       - name: Setup JIRA configuration
         if: steps.should_run.outputs.skip != 'true'
