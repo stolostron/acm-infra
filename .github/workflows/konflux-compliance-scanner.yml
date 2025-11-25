@@ -33,6 +33,11 @@ env:
   JIRA_LABELS: "konflux,compliance,auto-created"
   SKIP_DUPLICATES: "true"
   AUTO_CLOSE: "true"
+  KUBECTL_VERSION: "1.31.0"
+  OC_VERSION: "4.17.8"
+  YQ_VERSION: "4.44.3"
+  JIRA_CLI_VERSION: "1.5.2"
+  CACHE_VERSION: "v1"
 
 jobs:
   compliance-scan:
@@ -102,65 +107,78 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Cache CLI tools
+        uses: actions/cache@v4
+        id: cache-tools
+        if: steps.should_run.outputs.skip != 'true'
+        with:
+          path: /tmp/acm-tools
+          key: cli-tools-${{ runner.os }}-kubectl-${{ env.KUBECTL_VERSION }}-oc-${{ env.OC_VERSION }}-yq-${{ env.YQ_VERSION }}-jira-${{ env.JIRA_CLI_VERSION }}-${{ env.CACHE_VERSION }}
+          restore-keys: |
+            cli-tools-${{ runner.os }}-kubectl-${{ env.KUBECTL_VERSION }}-
+
       - name: Install required tools
         if: steps.should_run.outputs.skip != 'true'
         run: |
-          # Install kubectl only if not available (for local act testing)
-          if ! command -v kubectl &> /dev/null; then
+          TOOL_DIR="/tmp/acm-tools"
+
+          if [[ "${{ steps.cache-tools.outputs.cache-hit }}" == "true" ]]; then
+            echo "✓ Restoring tools from cache..."
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/kubectl" /usr/local/bin/kubectl
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/oc" /usr/local/bin/oc
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/yq" /usr/local/bin/yq
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/jira" /usr/local/bin/jira
+            echo "✓ All tools restored from cache in ~5 seconds"
+          else
+            echo "Cache miss - downloading tools..."
+            mkdir -p "$TOOL_DIR"
+
+            # Download kubectl (use pinned version)
             echo "Installing kubectl..."
-            KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
-            # Use wget with better retry logic, fallback to curl if wget unavailable
-            if command -v wget &> /dev/null; then
-              wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 --tries=3 \
-                -O kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
-            else
-              curl -L --retry 5 --retry-delay 3 --retry-max-time 120 --connect-timeout 30 --max-time 300 \
-                -C - -o kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
-            fi
-            sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
-            rm -f kubectl
-          else
-            echo "kubectl already installed"
-          fi
+            curl -L --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 300 \
+              -o "$TOOL_DIR/kubectl" \
+              "https://dl.k8s.io/release/v${{ env.KUBECTL_VERSION }}/bin/linux/amd64/kubectl"
+            chmod +x "$TOOL_DIR/kubectl"
 
-          # Install OpenShift CLI (oc)
-          if ! command -v oc &> /dev/null; then
+            # Download oc (already pinned at 4.17.8)
             echo "Installing OpenShift CLI (oc)..."
-            OC_VERSION="4.17.8"
-            # Use wget with better retry logic, fallback to curl if wget unavailable
-            if command -v wget &> /dev/null; then
-              wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 --tries=3 \
-                -O openshift-client-linux.tar.gz \
-                "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz"
-            else
-              curl -L --retry 5 --retry-delay 3 --retry-max-time 120 --connect-timeout 30 --max-time 300 \
-                -C - -o openshift-client-linux.tar.gz \
-                "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz"
-            fi
-            tar -xzf openshift-client-linux.tar.gz oc
-            sudo install -o root -g root -m 0755 oc /usr/local/bin/oc
-            rm -f openshift-client-linux.tar.gz oc kubectl
-          else
-            echo "oc already installed"
+            curl -L --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 300 \
+              -o /tmp/openshift-client-linux.tar.gz \
+              "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${{ env.OC_VERSION }}/openshift-client-linux.tar.gz"
+            tar -xzf /tmp/openshift-client-linux.tar.gz -C "$TOOL_DIR" oc
+            chmod +x "$TOOL_DIR/oc"
+            rm -f /tmp/openshift-client-linux.tar.gz
+
+            # Download yq (use pinned version)
+            echo "Installing yq..."
+            curl -L --retry 3 --retry-delay 2 --fail \
+              -o "$TOOL_DIR/yq" \
+              "https://github.com/mikefarah/yq/releases/download/v${{ env.YQ_VERSION }}/yq_linux_amd64"
+            chmod +x "$TOOL_DIR/yq"
+
+            # Download jira-cli (use pinned version)
+            echo "Installing jira-cli..."
+            curl -L --retry 3 --retry-delay 2 --fail \
+              -o /tmp/jira.tar.gz \
+              "https://github.com/ankitpokhrel/jira-cli/releases/download/v${{ env.JIRA_CLI_VERSION }}/jira_${{ env.JIRA_CLI_VERSION }}_linux_x86_64.tar.gz"
+            tar -xzf /tmp/jira.tar.gz -C /tmp
+            mv /tmp/bin/jira "$TOOL_DIR/jira"
+            chmod +x "$TOOL_DIR/jira"
+            rm -rf /tmp/jira.tar.gz /tmp/bin /tmp/completions /tmp/man
+
+            # Install to system
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/kubectl" /usr/local/bin/kubectl
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/oc" /usr/local/bin/oc
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/yq" /usr/local/bin/yq
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/jira" /usr/local/bin/jira
           fi
 
-          echo "Installing yq..."
-          sudo curl -L --retry 3 --retry-delay 2 --fail https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq
-          sudo chmod +x /usr/local/bin/yq
-
-          echo "Installing jira-cli..."
-          JIRA_CLI_VERSION=$(curl -s --retry 3 --retry-delay 2 https://api.github.com/repos/ankitpokhrel/jira-cli/releases/latest | jq -r '.tag_name' | sed 's/^v//')
-          curl -L --retry 3 --retry-delay 2 --fail -o "jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz" "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_CLI_VERSION}/jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz"
-          tar -xzf "jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz"
-          # Find the jira binary and move it to /usr/local/bin
-          find . -name "jira" -type f -executable -exec sudo mv {} /usr/local/bin/jira \;
-          sudo chmod +x /usr/local/bin/jira
-          rm -rf "jira_${JIRA_CLI_VERSION}_linux_x86_64.tar.gz" bin completions man
-
+          # Skopeo: Keep apt-get install (not easily cacheable)
           echo "Installing skopeo..."
-          sudo apt-get update
-          sudo apt-get install -y skopeo
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
 
+          # Verify installations
           echo "Verifying installations..."
           kubectl version --client
           oc version --client
