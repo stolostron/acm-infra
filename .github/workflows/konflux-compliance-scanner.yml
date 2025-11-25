@@ -162,9 +162,10 @@ jobs:
               -o /tmp/jira.tar.gz \
               "https://github.com/ankitpokhrel/jira-cli/releases/download/v${{ env.JIRA_CLI_VERSION }}/jira_${{ env.JIRA_CLI_VERSION }}_linux_x86_64.tar.gz"
             tar -xzf /tmp/jira.tar.gz -C /tmp
-            mv /tmp/bin/jira "$TOOL_DIR/jira"
+            # Find the jira binary and move it to TOOL_DIR
+            find /tmp -name "jira" -type f -executable -exec mv {} "$TOOL_DIR/jira" \; -quit
             chmod +x "$TOOL_DIR/jira"
-            rm -rf /tmp/jira.tar.gz /tmp/bin /tmp/completions /tmp/man
+            rm -rf /tmp/jira.tar.gz /tmp/jira_*
 
             # Install to system
             sudo install -o root -g root -m 0755 "$TOOL_DIR/kubectl" /usr/local/bin/kubectl
