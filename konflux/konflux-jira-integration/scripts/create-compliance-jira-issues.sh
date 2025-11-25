@@ -809,7 +809,12 @@ create_jira_issue() {
     local summary="[$APP_NAME] $component_name - Konflux compliance failure"
 
     local compliance_specific_labels=$(get_compliance_labels "$promotion_status" "$promoted_time" "$hermetic_status" "$ec_status" "$multiarch_status" "$push_status")
-    local all_labels="$LABELS"
+
+    # Add component name as label for reliable auto-close functionality
+    # This enables backward-compatible component extraction from labels
+    local component_label="component:$component_name"
+
+    local all_labels="$LABELS,$component_label"
     if [[ -n "$compliance_specific_labels" ]]; then
         all_labels="$all_labels,$compliance_specific_labels"
     fi
@@ -952,6 +957,93 @@ close_jira_issue() {
 # AUTO-CLOSE FUNCTIONALITY
 # ==============================================================================
 
+# Extract component name from JIRA issue (backward compatible)
+# Tries multiple methods to extract component name:
+#   1. From labels (component:xxx) - for new issues
+#   2. From summary - for old issues
+# Args: issue_key, summary, labels
+# Returns: Component name
+extract_component_from_issue() {
+    local issue_key="$1"
+    local summary="$2"
+    local labels="$3"
+
+    # Method 1: Try to extract from labels (new issues with component:xxx label)
+    if [[ -n "$labels" ]]; then
+        debug_echo "${BLUE}Attempting to extract component from labels...${NC}"
+        local component_from_label=$(echo "$labels" | tr ',' '\n' | grep "^component:" | sed 's/^component://' | head -1 | xargs)
+        if [[ -n "$component_from_label" ]]; then
+            debug_echo "${GREEN}✓ Extracted component from label: $component_from_label${NC}"
+            echo "$component_from_label"
+            return 0
+        else
+            debug_echo "${YELLOW}No 'component:xxx' label found in: $labels${NC}"
+            debug_echo "  Available labels: $(echo "$labels" | tr ',' '\n' | sed 's/^/    - /' | tr '\n' ' ')"
+        fi
+    else
+        debug_echo "${YELLOW}No labels provided, skipping label extraction${NC}"
+    fi
+
+    # Method 2: Fall back to extracting from summary (old issues)
+    # Use multiple patterns to handle various summary formats
+    if [[ -n "$summary" ]]; then
+        local component_from_summary=""
+        local pattern_used=""
+
+        # Pattern 1: Try strict pattern first (with " - Konflux")
+        component_from_summary=$(echo "$summary" | sed -n 's/.*\] \(.*\) - Konflux.*/\1/p' | xargs)
+        if [[ -n "$component_from_summary" ]]; then
+            pattern_used="strict ([app] component - Konflux ...)"
+        fi
+
+        # Pattern 2: If failed, try with any " - " pattern
+        if [[ -z "$component_from_summary" ]]; then
+            debug_echo "${YELLOW}Pattern 1 failed (strict), trying pattern 2 (permissive)${NC}"
+            component_from_summary=$(echo "$summary" | sed -n 's/.*\] \(.*\) - .*/\1/p' | xargs)
+            if [[ -n "$component_from_summary" ]]; then
+                pattern_used="permissive ([app] component - ...)"
+            fi
+        fi
+
+        # Pattern 3: If still failed, extract everything after "] "
+        if [[ -z "$component_from_summary" ]]; then
+            debug_echo "${YELLOW}Pattern 2 failed (permissive), trying pattern 3 (minimal)${NC}"
+            component_from_summary=$(echo "$summary" | sed -n 's/.*\] \(.*\)$/\1/p' | xargs)
+            if [[ -n "$component_from_summary" ]]; then
+                pattern_used="minimal ([app] component)"
+            fi
+        fi
+
+        if [[ -n "$component_from_summary" ]]; then
+            debug_echo "${BLUE}Extracted component from summary using $pattern_used: $component_from_summary${NC}"
+            echo "$component_from_summary"
+            return 0
+        else
+            debug_echo "${YELLOW}All summary patterns failed:${NC}"
+            debug_echo "  Pattern 1: '.*\] \(.*\) - Konflux.*' - expected format: [app] component - Konflux ..."
+            debug_echo "  Pattern 2: '.*\] \(.*\) - .*' - expected format: [app] component - ..."
+            debug_echo "  Pattern 3: '.*\] \(.*\)$' - expected format: [app] component"
+        fi
+    fi
+
+    # Failed to extract from all methods
+    debug_echo ""
+    debug_echo "${RED}════════════════════════════════════════════════════════════════${NC}"
+    debug_echo "${RED}✗ FAILED to extract component from issue $issue_key${NC}"
+    debug_echo "${RED}════════════════════════════════════════════════════════════════${NC}"
+    debug_echo "${YELLOW}Summary:${NC} $summary"
+    debug_echo "${YELLOW}Labels:${NC} $labels"
+    debug_echo ""
+    debug_echo "${YELLOW}Troubleshooting:${NC}"
+    debug_echo "  1. Check if the issue summary follows the expected format: [app] component - Konflux ..."
+    debug_echo "  2. For new issues, ensure 'component:xxx' label is added"
+    debug_echo "  3. This issue may have been created manually with a non-standard format"
+    debug_echo "  4. Run with --debug flag to see detailed pattern matching attempts"
+    debug_echo ""
+    return 1
+}
+
+# Legacy function for backward compatibility (kept for reference)
 # Extract component name from JIRA summary
 # Args: summary
 # Returns: Component name
@@ -982,8 +1074,8 @@ auto_close_resolved_issues() {
 
     local jql="project=$project AND $label_filters AND status NOT IN (Closed,Done,Resolved)"
 
-    # Query JIRA for open issues
-    local open_issues=$(jira issue list --jql "$jql" --plain --no-headers --columns KEY,SUMMARY 2>/dev/null || echo "")
+    # Query JIRA for open issues (include LABELS for component extraction)
+    local open_issues=$(jira issue list --jql "$jql" --plain --no-headers --columns KEY,SUMMARY,LABELS 2>/dev/null || echo "")
 
     if [[ -z "$open_issues" ]]; then
         info "No open issues found to auto-close"
@@ -1001,11 +1093,13 @@ auto_close_resolved_issues() {
     info "Auto-closing resolved issues"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-    while IFS=$'\t' read -r issue_key summary; do
-        local component_name=$(extract_component_from_summary "$summary")
+    while IFS=$'\t' read -r issue_key summary labels; do
+        local component_name=$(extract_component_from_issue "$issue_key" "$summary" "$labels")
 
         if [[ -z "$component_name" ]]; then
-            warn "⊘ Skipping $issue_key - could not extract component name from summary"
+            warn "⊘ Skipping $issue_key - could not extract component name"
+            debug_echo "  Summary: $summary"
+            debug_echo "  Labels: $labels"
             skipped_count=$((skipped_count + 1))
             continue
         fi
