@@ -1,0 +1,395 @@
+name: Konflux Compliance Retrigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      application:
+        description: 'Application name(s) - single (e.g., acm-215), multiple comma-separated (e.g., acm-214,acm-215,mce-29), or "all"'
+        required: false
+        default: 'all'
+      retrigger_failed:
+        description: 'Retrigger failed builds'
+        type: boolean
+        default: true
+      squad_filter:
+        description: 'Filter by squad (optional)'
+        required: false
+
+jobs:
+  compliance-retrigger:
+    name: Retrigger ${{ matrix.application }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        application:
+          - acm-211
+          - acm-212
+          - acm-213
+          - acm-214
+          - acm-215
+          - acm-216
+          - mce-26
+          - mce-27
+          - mce-28
+          - mce-29
+          - mce-210
+          - mce-211
+
+    steps:
+      - name: Check if should run
+        id: should_run
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            APP_INPUT="${{ github.event.inputs.application }}"
+            MATRIX_APP="${{ matrix.application }}"
+
+            # If "all", run everything
+            if [[ "$APP_INPUT" == "all" ]]; then
+              echo "skip=false" >> $GITHUB_OUTPUT
+              echo "Running $MATRIX_APP (all applications selected)"
+            # If input contains comma, treat as list
+            elif [[ "$APP_INPUT" == *","* ]]; then
+              # Convert comma-separated list to array and check if current matrix app is in the list
+              IFS=',' read -ra APP_LIST <<< "$APP_INPUT"
+              FOUND=false
+              for app in "${APP_LIST[@]}"; do
+                # Trim whitespace
+                app=$(echo "$app" | xargs)
+                if [[ "$app" == "$MATRIX_APP" ]]; then
+                  FOUND=true
+                  break
+                fi
+              done
+
+              if [[ "$FOUND" == "true" ]]; then
+                echo "skip=false" >> $GITHUB_OUTPUT
+                echo "Running $MATRIX_APP (found in list: $APP_INPUT)"
+              else
+                echo "skip=true" >> $GITHUB_OUTPUT
+                echo "Skipping $MATRIX_APP (not in list: $APP_INPUT)"
+              fi
+            # Single application name
+            elif [[ "$APP_INPUT" == "$MATRIX_APP" ]]; then
+              echo "skip=false" >> $GITHUB_OUTPUT
+              echo "Running $MATRIX_APP (exact match)"
+            else
+              echo "skip=true" >> $GITHUB_OUTPUT
+              echo "Skipping $MATRIX_APP (only running $APP_INPUT)"
+            fi
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install required tools
+        if: steps.should_run.outputs.skip != 'true'
+        run: |
+          # Install kubectl only if not available (for local act testing)
+          if ! command -v kubectl &> /dev/null; then
+            echo "Installing kubectl..."
+            KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+            # Use wget with better retry logic, fallback to curl if wget unavailable
+            if command -v wget &> /dev/null; then
+              wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 --tries=3 \
+                -O kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+            else
+              curl -L --retry 5 --retry-delay 3 --retry-max-time 120 --connect-timeout 30 --max-time 300 \
+                -C - -o kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+            fi
+            sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+            rm -f kubectl
+          else
+            echo "kubectl already installed"
+          fi
+
+          # Install OpenShift CLI (oc)
+          if ! command -v oc &> /dev/null; then
+            echo "Installing OpenShift CLI (oc)..."
+            OC_VERSION="4.17.8"
+            # Use wget with better retry logic, fallback to curl if wget unavailable
+            if command -v wget &> /dev/null; then
+              wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 --tries=3 \
+                -O openshift-client-linux.tar.gz \
+                "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz"
+            else
+              curl -L --retry 5 --retry-delay 3 --retry-max-time 120 --connect-timeout 30 --max-time 300 \
+                -C - -o openshift-client-linux.tar.gz \
+                "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz"
+            fi
+            tar -xzf openshift-client-linux.tar.gz oc
+            sudo install -o root -g root -m 0755 oc /usr/local/bin/oc
+            rm -f openshift-client-linux.tar.gz oc kubectl
+          else
+            echo "oc already installed"
+          fi
+
+          echo "Installing yq..."
+          sudo curl -L --retry 3 --retry-delay 2 --fail https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+
+          echo "Installing skopeo..."
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+          echo "Verifying installations..."
+          kubectl version --client
+          oc version --client
+          yq --version
+          skopeo --version
+
+      - name: Checkout repository
+        if: steps.should_run.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+          submodules: 'recursive'
+
+      - name: Setup scripts
+        if: steps.should_run.outputs.skip != 'true'
+        run: |
+          echo "Using local scripts from konflux/konflux-jira-integration/scripts/"
+          echo ""
+
+          # Verify scripts exist
+          if [[ ! -f "${{ github.workspace }}/konflux/konflux-jira-integration/scripts/compliance.sh" ]]; then
+            echo "❌ ERROR: compliance.sh not found"
+            exit 1
+          fi
+
+          echo "✓ Required scripts found"
+          echo ""
+
+          # Verify component registry configuration
+          # Primary: new centralized registry from acm-config submodule
+          # Fallback: old component-squad.yaml
+          NEW_REGISTRY="${{ github.workspace }}/acm-config/product/component-registry.yaml"
+          OLD_REGISTRY="${{ github.workspace }}/konflux/konflux-jira-integration/scripts/component-squad.yaml"
+
+          if [[ -f "$NEW_REGISTRY" ]]; then
+            echo "✓ Using new component registry: acm-config/product/component-registry.yaml"
+            COMPONENT_COUNT=$(yq '.components | length' "$NEW_REGISTRY")
+            echo "  Components registered: $COMPONENT_COUNT"
+          elif [[ -f "$OLD_REGISTRY" ]]; then
+            echo "⚠ Using legacy component-squad.yaml (new registry not found)"
+            echo "  Note: Please ensure acm-config submodule is initialized"
+          else
+            echo "❌ ERROR: No component registry found"
+            echo "  Checked: $NEW_REGISTRY"
+            echo "  Checked: $OLD_REGISTRY"
+            exit 1
+          fi
+
+          echo ""
+          echo "✓ Configuration validated"
+          echo ""
+          echo "=== Scripts directory ==="
+          ls -la ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/
+          echo ""
+          echo "=== acm-config submodule status ==="
+          if [[ -d "${{ github.workspace }}/acm-config" ]]; then
+            ls -la ${{ github.workspace }}/acm-config/product/ || echo "  product/ directory not found"
+          else
+            echo "  acm-config submodule not initialized"
+          fi
+
+      - name: Setup Konflux cluster authentication
+        if: steps.should_run.outputs.skip != 'true'
+        env:
+          KONFLUX_API_ENDPOINT: ${{ secrets.KONFLUX_API_ENDPOINT }}
+          KONFLUX_API_TOKEN: ${{ secrets.KONFLUX_API_TOKEN }}
+        run: |
+          echo "Setting up Konflux cluster authentication..."
+          echo "API Endpoint: $KONFLUX_API_ENDPOINT"
+
+          # Test connectivity
+          echo "Testing connection to Konflux cluster..."
+          if ! kubectl --server="$KONFLUX_API_ENDPOINT" \
+                  --token="$KONFLUX_API_TOKEN" \
+                  --insecure-skip-tls-verify \
+                  get namespaces 2>&1 | head -5; then
+            echo ""
+            echo "❌ Failed to connect to Konflux cluster"
+            echo "Please check KONFLUX_API_ENDPOINT and KONFLUX_API_TOKEN secrets"
+            exit 1
+          fi
+
+          echo "✓ Konflux cluster connection successful"
+
+          # Configure kubectl
+          kubectl config set-cluster konflux \
+            --server="$KONFLUX_API_ENDPOINT" \
+            --insecure-skip-tls-verify=true
+
+          kubectl config set-credentials scanner \
+            --token="$KONFLUX_API_TOKEN"
+
+          kubectl config set-context konflux \
+            --cluster=konflux \
+            --user=scanner \
+            --namespace=crt-redhat-acm-tenant
+
+          kubectl config use-context konflux
+
+          echo "✓ kubectl configured for Konflux cluster"
+
+          # Configure oc (OpenShift CLI) to use the same context
+          # oc shares the same kubeconfig with kubectl
+          oc config set-cluster konflux \
+            --server="$KONFLUX_API_ENDPOINT" \
+            --insecure-skip-tls-verify=true
+
+          oc config set-credentials scanner \
+            --token="$KONFLUX_API_TOKEN"
+
+          oc config set-context konflux \
+            --cluster=konflux \
+            --user=scanner \
+            --namespace=crt-redhat-acm-tenant
+
+          oc config use-context konflux
+
+          echo "✓ oc configured for Konflux cluster"
+
+          # Verify access to tenant namespace
+          echo "Verifying access to crt-redhat-acm-tenant namespace..."
+          if oc get namespace crt-redhat-acm-tenant > /dev/null 2>&1; then
+            echo "✓ Access to crt-redhat-acm-tenant verified"
+          else
+            echo "WARNING: Cannot access crt-redhat-acm-tenant namespace"
+          fi
+
+          # Set current project/namespace for oc
+          echo "Setting current OpenShift project..."
+          if oc project crt-redhat-acm-tenant > /dev/null 2>&1; then
+            echo "✓ Switched to project crt-redhat-acm-tenant"
+          else
+            echo "WARNING: Could not switch to project crt-redhat-acm-tenant"
+          fi
+
+      - name: Setup GitHub token
+        if: steps.should_run.outputs.skip != 'true'
+        run: |
+          echo "Setting up GitHub authentication..."
+          mkdir -p ${{ github.workspace }}/data
+          # Put authorization.txt in scripts directory where compliance.sh expects it
+          echo "${{ secrets.GH_PAT }}" > ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/authorization.txt
+          chmod 600 ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/authorization.txt
+          echo "✓ GitHub token configured"
+
+      - name: Run compliance retrigger
+        if: steps.should_run.outputs.skip != 'true'
+        working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
+        env:
+          SQUAD_FILTER: ${{ github.event.inputs.squad_filter }}
+        run: |
+          echo "=================================================="
+          echo "Running Compliance Retrigger for ${{ matrix.application }}"
+          echo "=================================================="
+          echo "Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          echo ""
+
+          # Build compliance command with retrigger flag
+          COMPLIANCE_CMD="./compliance.sh --retrigger"
+          echo "Retrigger failed components: yes"
+
+          if [[ -n "$SQUAD_FILTER" ]]; then
+            COMPLIANCE_CMD="$COMPLIANCE_CMD --squad=$SQUAD_FILTER"
+            echo "Squad filter: $SQUAD_FILTER"
+          fi
+
+          COMPLIANCE_CMD="$COMPLIANCE_CMD ${{ matrix.application }}"
+
+          # Create output directories
+          mkdir -p ${{ github.workspace }}/data
+          mkdir -p ${{ github.workspace }}/logs
+
+          # Enable debug output for better error tracking
+          echo "=== Debug Information ==="
+          echo "Current directory: $(pwd)"
+          echo "Script location: $(ls -la compliance.sh)"
+          echo "Environment variables:"
+          echo "  GITHUB_WORKSPACE: ${{ github.workspace }}"
+          echo ""
+
+          # Export GITHUB_TOKEN for compliance.sh script
+          export GITHUB_TOKEN="${{ secrets.GH_PAT }}"
+
+          echo "Running: $COMPLIANCE_CMD"
+          echo ""
+
+          # Run with more verbose output and capture exit code
+          # Use pipefail to ensure we catch failures in the pipeline
+          set -o pipefail
+          eval "$COMPLIANCE_CMD" 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-compliance-retrigger.log"
+          COMPLIANCE_EXIT_CODE=$?
+          set +o pipefail
+
+          echo ""
+          echo "=== Compliance Script Exit Code: $COMPLIANCE_EXIT_CODE ==="
+
+          # The compliance.sh script creates CSV in ./data/ relative to its working directory
+          # Since we're running in scripts/, the CSV is at scripts/data/
+          # Move the generated CSV to the workspace data directory
+          SCRIPT_CSV_FILE="./data/${{ matrix.application }}-compliance.csv"
+          WORKSPACE_CSV_FILE="${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv"
+
+          echo ""
+          echo "=== Files in script data directory after retrigger ==="
+          ls -lah ./data/ || echo "Script data directory is empty or does not exist"
+          echo ""
+
+          # Move CSV file to workspace data directory if it exists
+          if [[ -f "$SCRIPT_CSV_FILE" ]]; then
+            echo "Moving CSV from $SCRIPT_CSV_FILE to $WORKSPACE_CSV_FILE"
+            mv "$SCRIPT_CSV_FILE" "$WORKSPACE_CSV_FILE"
+            echo "✓ CSV file moved successfully"
+          else
+            echo "❌ ERROR: Compliance CSV file not generated at: $SCRIPT_CSV_FILE"
+            echo ""
+            echo "=== Last 50 lines of retrigger log ==="
+            tail -n 50 "${{ github.workspace }}/logs/${{ matrix.application }}-compliance-retrigger.log"
+            echo ""
+            echo "=== Full script data directory listing ==="
+            find ./data/ -type f -ls 2>/dev/null || echo "No files found in script data directory"
+            exit 1
+          fi
+
+          # Verify CSV was moved successfully
+          if [[ ! -f "$WORKSPACE_CSV_FILE" ]]; then
+            echo "❌ ERROR: Failed to move CSV file to workspace data directory"
+            exit 1
+          fi
+
+          echo ""
+          echo "✓ Compliance retrigger completed"
+          echo "CSV file: $WORKSPACE_CSV_FILE"
+
+          # Show summary
+          TOTAL_COMPONENTS=$(tail -n +2 "$WORKSPACE_CSV_FILE" | wc -l | tr -d ' ')
+          echo "Total components retriggered: $TOTAL_COMPONENTS"
+
+      - name: Upload retrigger results
+        if: always() && steps.should_run.outputs.skip != 'true' && env.ACT != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-retrigger-results-${{ matrix.application }}
+          path: |
+            ${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv
+            ${{ github.workspace }}/logs/${{ matrix.application }}-*.log
+          retention-days: 30
+
+      - name: Summary
+        if: steps.should_run.outputs.skip != 'true'
+        run: |
+          echo "=================================================="
+          echo "Compliance Retrigger Completed Successfully"
+          echo "=================================================="
+          echo "Application: ${{ matrix.application }}"
+          echo "Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          echo ""
+          echo "Output files:"
+          echo "  - CSV: data/${{ matrix.application }}-compliance.csv"
+          echo "  - Retrigger Log: logs/${{ matrix.application }}-compliance-retrigger.log"
+          echo ""
