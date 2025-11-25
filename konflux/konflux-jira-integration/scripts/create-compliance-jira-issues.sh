@@ -1083,7 +1083,7 @@ auto_close_resolved_issues() {
         label_filters+="labels=$label"
     done
 
-    local jql="project=$project AND $label_filters AND status NOT IN (Closed,Done,Resolved)"
+    local jql="project=$project AND $label_filters AND status NOT IN (Closed,Done)"
 
     # Query JIRA for open issues (include LABELS for component extraction)
     local open_issues=$(jira issue list --jql "$jql" --plain --no-headers --columns KEY,SUMMARY,LABELS 2>/dev/null || echo "")
