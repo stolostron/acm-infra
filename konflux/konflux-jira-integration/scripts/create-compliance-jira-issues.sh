@@ -991,7 +991,12 @@ extract_component_from_issue() {
         local pattern_used=""
 
         # Pattern 1: Try strict pattern first (with " - Konflux")
-        component_from_summary=$(echo "$summary" | sed -n 's/.*\] \(.*\) - Konflux.*/\1/p' | xargs)
+        # Note: jira CLI may output Unicode brackets ⦗⦘ instead of [] in some environments
+        component_from_summary=$(echo "$summary" | sed -E 's/.*(\]|⦘) (.*) - Konflux.*/\2/' | xargs)
+        # Fallback: if sed -E output equals input, extraction failed
+        if [[ "$component_from_summary" == "$summary" ]]; then
+            component_from_summary=""
+        fi
         if [[ -n "$component_from_summary" ]]; then
             pattern_used="strict ([app] component - Konflux ...)"
         fi
@@ -999,16 +1004,22 @@ extract_component_from_issue() {
         # Pattern 2: If failed, try with any " - " pattern
         if [[ -z "$component_from_summary" ]]; then
             debug_echo "${YELLOW}Pattern 1 failed (strict), trying pattern 2 (permissive)${NC}"
-            component_from_summary=$(echo "$summary" | sed -n 's/.*\] \(.*\) - .*/\1/p' | xargs)
+            component_from_summary=$(echo "$summary" | sed -E 's/.*(\]|⦘) (.*) - .*/\2/' | xargs)
+            if [[ "$component_from_summary" == "$summary" ]]; then
+                component_from_summary=""
+            fi
             if [[ -n "$component_from_summary" ]]; then
                 pattern_used="permissive ([app] component - ...)"
             fi
         fi
 
-        # Pattern 3: If still failed, extract everything after "] "
+        # Pattern 3: If still failed, extract everything after "] " or "⦘ "
         if [[ -z "$component_from_summary" ]]; then
             debug_echo "${YELLOW}Pattern 2 failed (permissive), trying pattern 3 (minimal)${NC}"
-            component_from_summary=$(echo "$summary" | sed -n 's/.*\] \(.*\)$/\1/p' | xargs)
+            component_from_summary=$(echo "$summary" | sed -E 's/.*(\]|⦘) (.*)$/\2/' | xargs)
+            if [[ "$component_from_summary" == "$summary" ]]; then
+                component_from_summary=""
+            fi
             if [[ -n "$component_from_summary" ]]; then
                 pattern_used="minimal ([app] component)"
             fi
