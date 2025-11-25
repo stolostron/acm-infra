@@ -1098,8 +1098,9 @@ auto_close_resolved_issues() {
 
         if [[ -z "$component_name" ]]; then
             warn "⊘ Skipping $issue_key - could not extract component name"
-            debug_echo "  Summary: $summary"
-            debug_echo "  Labels: $labels"
+            # Always show summary and labels for failed extraction (not just in debug mode)
+            echo "  Summary: $summary" >&2
+            echo "  Labels: $labels" >&2
             skipped_count=$((skipped_count + 1))
             continue
         fi
