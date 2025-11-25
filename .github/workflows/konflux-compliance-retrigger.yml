@@ -1,6 +1,10 @@
 name: Konflux Compliance Retrigger
 
 on:
+  schedule:
+    # Run at midnight EST (5:00 UTC), every day
+    - cron: '0 5 * * *'
+
   workflow_dispatch:
     inputs:
       application:
