@@ -739,7 +739,7 @@ else
 fi
 
 # Component processing delay (in seconds) to avoid GitHub API rate limits
-COMPONENT_DELAY=5
+COMPONENT_DELAY=2
 
 component_count=0
 total_components=$(echo "$components" | wc -l | tr -d ' ')
