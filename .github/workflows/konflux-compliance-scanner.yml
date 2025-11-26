@@ -256,36 +256,24 @@ jobs:
           echo "Validating Konflux API token..."
           echo "API Endpoint: $KONFLUX_API_ENDPOINT"
 
-          # Test token validity with a simple API call
-          echo "Testing connection to Konflux cluster..."
+          # Verify token can access the target namespace
+          echo "Verifying access to crt-redhat-acm-tenant namespace..."
           if ! kubectl --server="$KONFLUX_API_ENDPOINT" \
                   --token="$KONFLUX_API_TOKEN" \
                   --insecure-skip-tls-verify \
-                  get namespaces 2>&1 | head -5; then
+                  get namespace crt-redhat-acm-tenant > /dev/null 2>&1; then
             echo ""
-            echo "❌ Failed to connect to Konflux cluster"
+            echo "❌ Failed to access crt-redhat-acm-tenant namespace"
             echo "Possible reasons:"
             echo "  - KONFLUX_API_TOKEN has expired"
-            echo "  - KONFLUX_API_TOKEN has insufficient permissions"
+            echo "  - KONFLUX_API_TOKEN lacks access to crt-redhat-acm-tenant namespace"
             echo "  - KONFLUX_API_ENDPOINT is incorrect or unreachable"
             echo ""
             echo "Please verify and update the KONFLUX_API_TOKEN secret"
             exit 1
           fi
 
-          # Verify we can perform actual operations (not just authenticate)
-          echo "Verifying token permissions..."
-          if ! kubectl --server="$KONFLUX_API_ENDPOINT" \
-                  --token="$KONFLUX_API_TOKEN" \
-                  --insecure-skip-tls-verify \
-                  auth can-i get namespaces > /dev/null 2>&1; then
-            echo ""
-            echo "❌ Token authenticated but lacks required permissions"
-            echo "Please ensure the token has sufficient cluster access"
-            exit 1
-          fi
-
-          echo "✓ Konflux API token is valid and has required permissions"
+          echo "✓ Konflux API token is valid and has access to crt-redhat-acm-tenant namespace"
 
       - name: Setup Konflux cluster authentication
         if: steps.should_run.outputs.skip != 'true'
