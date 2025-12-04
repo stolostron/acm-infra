@@ -1741,9 +1741,13 @@ main() {
         set -u
     fi
 
-    # Check dependencies
+    # Check dependencies (skip JIRA-related checks in dry-run mode)
     check_dependencies
-    check_jira_cli
+    if [[ "$DRY_RUN" != true ]]; then
+        check_jira_cli
+    else
+        info "Dry-run mode: skipping JIRA CLI configuration check"
+    fi
 
     # Print header
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
