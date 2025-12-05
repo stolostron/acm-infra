@@ -291,16 +291,31 @@ is_image_stale() {
     if [[ "$promoted_time" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
         # Convert promoted_time to epoch seconds (handle both Z suffix and no suffix)
         local promoted_time_clean="${promoted_time%Z}"
-        local promoted_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$promoted_time_clean" "+%s" 2>/dev/null)
+        local promoted_epoch=""
+        local date_error=""
+
+        # Try GNU date first (Linux), then BSD date (macOS)
+        if date_error=$(date -d "$promoted_time_clean" "+%s" 2>&1); then
+            promoted_epoch="$date_error"
+        elif date_error=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$promoted_time_clean" "+%s" 2>&1); then
+            promoted_epoch="$date_error"
+        else
+            warn "Failed to parse promoted_time '$promoted_time': $date_error"
+            return 1
+        fi
 
         if [[ -n "$promoted_epoch" ]]; then
             local current_epoch=$(date +%s)
             local age_seconds=$((current_epoch - promoted_epoch))
 
+            debug_echo "Image age check: promoted_time=$promoted_time, age_seconds=$age_seconds, threshold=$IMAGE_STALE_THRESHOLD"
+
             if [[ $age_seconds -gt $IMAGE_STALE_THRESHOLD ]]; then
                 return 0  # true - is stale
             fi
         fi
+    else
+        warn "Invalid promoted_time format: '$promoted_time' (expected ISO 8601 format)"
     fi
 
     return 1  # false - not stale
@@ -1726,9 +1741,13 @@ main() {
         set -u
     fi
 
-    # Check dependencies
+    # Check dependencies (skip JIRA-related checks in dry-run mode)
     check_dependencies
-    check_jira_cli
+    if [[ "$DRY_RUN" != true ]]; then
+        check_jira_cli
+    else
+        info "Dry-run mode: skipping JIRA CLI configuration check"
+    fi
 
     # Print header
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

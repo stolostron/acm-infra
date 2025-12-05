@@ -97,8 +97,49 @@ compliancefile="data/$application-compliance.csv"
 # Capture scan time (when this script runs)
 SCAN_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# Image staleness threshold (2 weeks in seconds)
+IMAGE_STALE_THRESHOLD=$((14 * 24 * 60 * 60))
+
 # Write CSV header
 echo "Konflux Component,Scan Time,Promoted Time,Promoted Status,Hermetic Builds,Enterprise Contract,Multiarch Support,Push Status,Push PipelineRun URL,EC PipelineRun URL" > $compliancefile
+
+# Function to check if image is stale (>2 weeks old) - log only, no CSV output
+check_image_stale() {
+    local build_time="$1"
+    local repo="$2"
+
+    # Check if build_time is a valid timestamp
+    if [[ "$build_time" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+        # Remove Z suffix if present
+        local build_time_clean="${build_time%Z}"
+
+        # Convert build_time to epoch seconds (macOS compatible)
+        local build_epoch
+        if [[ "$(uname)" == "Darwin" ]]; then
+            build_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$build_time_clean" "+%s" 2>/dev/null)
+        else
+            build_epoch=$(date -d "$build_time_clean" "+%s" 2>/dev/null)
+        fi
+
+        if [[ -n "$build_epoch" ]]; then
+            local current_epoch=$(date +%s)
+            local age_seconds=$((current_epoch - build_epoch))
+            local age_days=$((age_seconds / 86400))
+
+            if [[ $age_seconds -gt $IMAGE_STALE_THRESHOLD ]]; then
+                echo "🟥 $repo image stale: TRUE (${age_days} days old)" >&3
+                return 1  # stale
+            else
+                echo "🟩 $repo image stale: FALSE (${age_days} days old)" >&3
+                return 0  # fresh
+            fi
+        fi
+    fi
+
+    # If we can't determine the age, show warning
+    echo "🟡 $repo image stale: UNKNOWN (invalid timestamp: $build_time)" >&3
+    return 0
+}
 
 # Function to get components for a specific squad from YAML config
 get_squad_components() {
@@ -761,6 +802,9 @@ for line in $components; do
 
     data=$(check_promoted "$line" "$skopeo_mac_args")
 
+    # Extract build time from data (format: "buildtime,status")
+    build_time="${data%%,*}"
+
     url=$(oc get component "$line" -oyaml | yq ".spec.source.git.url")
     branch=$(oc get component "$line" -oyaml | yq ".spec.source.git.revision")
     org=$(basename $(dirname $url))
@@ -790,6 +834,9 @@ for line in $components; do
 
     # Check if component is a bundle operator
     bundle_result=$(check_bundle_operator "$line")
+
+    # Check if image is stale (>2 weeks old) - log only
+    check_image_stale "$build_time" "$repo"
 
     # Check hermetic builds (skip for bundle operators)
     if [[ "$bundle_result" == "BUNDLE_OPERATOR" ]]; then
