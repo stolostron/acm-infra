@@ -664,6 +664,9 @@ check_enterprise_contract() {
     if [[ -n "$ec" ]] && ! echo "$ec" | grep -v "^success$" > /dev/null; then
         echo "🟩 $repo $ecname: SUCCESS" >&3
         echo "Compliant|$ec_url"
+    elif [[ "$ec" == "null" ]]; then
+        echo "⚠️  $repo $ecname: WARNING (ec conclusion was null - check may not have run yet)" >&3
+        echo "EC_NULL|$ec_url"
     else
         echo "🟥 $repo $ecname: FAILURE (ec was: \"$ec\")" >&3
         if [[ -z "$ec" ]]; then
@@ -711,6 +714,9 @@ check_component_on_push() {
     if [[ -n "$push_status" ]] && ! echo "$push_status" | grep -v "^success$" > /dev/null; then
         echo "🟩 $repo $pushname: SUCCESS" >&3
         echo "Successful|$push_url"
+    elif [[ "$push_status" == "null" ]]; then
+        echo "⚠️  $repo $pushname: WARNING (push status was null - check may not have run yet)" >&3
+        echo "PUSH_NULL|$push_url"
     else
         echo "🟥 $repo $pushname: FAILURE (status was: \"$push_status\")" >&3
         echo "Failed|$push_url"
