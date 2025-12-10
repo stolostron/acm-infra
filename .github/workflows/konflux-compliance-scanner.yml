@@ -621,9 +621,230 @@ jobs:
             ${{ github.workspace }}/logs/${{ matrix.application }}-*.json
           retention-days: 30
 
-      - name: Summary
+      - name: Generate Summary
         if: steps.should_run.outputs.skip != 'true'
         run: |
+          CSV_FILE="${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv"
+          JIRA_LOG="${{ github.workspace }}/logs/${{ matrix.application }}-jira-creation.log"
+          JIRA_JSON="${{ github.workspace }}/logs/${{ matrix.application }}-jira-issues.json"
+
+          echo "## 🔍 Compliance Scan: ${{ matrix.application }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ -f "$CSV_FILE" ]]; then
+            # Count total components (excluding header)
+            TOTAL_COMPONENTS=$(tail -n +2 "$CSV_FILE" | wc -l | tr -d ' ')
+
+            # Count components by status
+            FAILED_PUSH=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $8}' | grep -c "Failed" || echo "0")
+            NOT_COMPLIANT=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $6}' | grep -c "Not Compliant" || echo "0")
+            HERMETIC_DISABLED=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $5}' | grep -c "Not Enabled" || echo "0")
+            MULTIARCH_DISABLED=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $7}' | grep -c "Not Enabled" || echo "0")
+            PROMOTION_FAILED=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $4}' | grep -cE "(Failed|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE)" || echo "0")
+
+            # Count compliant components
+            COMPLIANT_PUSH=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $8}' | grep -c "Successful" || echo "0")
+            COMPLIANT_EC=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $6}' | grep -c "Compliant" || echo "0")
+            HERMETIC_ENABLED=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $5}' | grep -c "Enabled" || echo "0")
+            MULTIARCH_ENABLED=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $7}' | grep -c "Enabled" || echo "0")
+
+            # Calculate total issues
+            TOTAL_ISSUES=$((FAILED_PUSH + NOT_COMPLIANT + HERMETIC_DISABLED + MULTIARCH_DISABLED + PROMOTION_FAILED))
+
+            # Determine overall status
+            if [[ $TOTAL_ISSUES -eq 0 ]]; then
+              echo "### ✅ All Components Compliant" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "### ⚠️ Compliance Issues Detected" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Overview table
+            echo "### 📊 Overview" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Total Components | $TOTAL_COMPONENTS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Components with Issues | $TOTAL_ISSUES |" >> $GITHUB_STEP_SUMMARY
+            echo "| Fully Compliant | $((TOTAL_COMPONENTS - TOTAL_ISSUES)) |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Compliance status breakdown
+            echo "### 📈 Compliance Status by Check Type" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Check Type | ✅ Pass | ❌ Fail |" >> $GITHUB_STEP_SUMMARY
+            echo "|------------|---------|---------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Push Pipeline | $COMPLIANT_PUSH | $FAILED_PUSH |" >> $GITHUB_STEP_SUMMARY
+            echo "| Enterprise Contract | $COMPLIANT_EC | $NOT_COMPLIANT |" >> $GITHUB_STEP_SUMMARY
+            echo "| Hermetic Builds | $HERMETIC_ENABLED | $HERMETIC_DISABLED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Multiarch Support | $MULTIARCH_ENABLED | $MULTIARCH_DISABLED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Image Promotion | $((TOTAL_COMPONENTS - PROMOTION_FAILED)) | $PROMOTION_FAILED |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Failed components details
+            if [[ $TOTAL_ISSUES -gt 0 ]]; then
+              echo "### 📋 Non-Compliant Components" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>Click to expand ($TOTAL_ISSUES components with issues)</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Component | Promotion | Hermetic | EC | Multiarch | Push | Build Time | Links |" >> $GITHUB_STEP_SUMMARY
+              echo "|-----------|-----------|----------|----|-----------| -----|------------|-------|" >> $GITHUB_STEP_SUMMARY
+
+              tail -n +2 "$CSV_FILE" | while IFS=',' read -r component scan_time promoted_time promotion_status hermetic_status ec_status multiarch_status push_status push_url ec_url; do
+                # Check if this component has any failure
+                if [[ "$promotion_status" =~ (Failed|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE) ]] || \
+                   [[ "$hermetic_status" == "Not Enabled" ]] || \
+                   [[ "$ec_status" == "Not Compliant" ]] || \
+                   [[ "$multiarch_status" == "Not Enabled" ]] || \
+                   [[ "$push_status" == "Failed" ]]; then
+                  # Format status with emojis
+                  PROMO_ICON=$([[ "$promotion_status" =~ (Failed|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE) ]] && echo "❌" || echo "✅")
+                  HERMETIC_ICON=$([[ "$hermetic_status" == "Not Enabled" ]] && echo "❌" || echo "✅")
+                  EC_ICON=$([[ "$ec_status" == "Not Compliant" ]] && echo "❌" || echo "✅")
+                  MULTIARCH_ICON=$([[ "$multiarch_status" == "Not Enabled" ]] && echo "❌" || echo "✅")
+                  PUSH_ICON=$([[ "$push_status" == "Failed" ]] && echo "❌" || echo "✅")
+
+                  # Create pipeline links
+                  LINKS=""
+                  if [[ -n "$push_url" && "$push_url" != "null" ]]; then
+                    LINKS="[Build]($push_url)"
+                  fi
+                  if [[ -n "$ec_url" && "$ec_url" != "null" ]]; then
+                    [[ -n "$LINKS" ]] && LINKS="$LINKS, "
+                    LINKS="${LINKS}[EC]($ec_url)"
+                  fi
+                  [[ -z "$LINKS" ]] && LINKS="-"
+
+                  # Format build time (show only date part for brevity)
+                  BUILD_DATE=$(echo "$promoted_time" | cut -d'T' -f1)
+                  [[ -z "$BUILD_DATE" || "$BUILD_DATE" == "null" ]] && BUILD_DATE="-"
+
+                  echo "| \`$component\` | $PROMO_ICON | $HERMETIC_ICON | $EC_ICON | $MULTIARCH_ICON | $PUSH_ICON | $BUILD_DATE | $LINKS |" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Compliant components (collapsed)
+            COMPLIANT_COUNT=$((TOTAL_COMPONENTS - TOTAL_ISSUES))
+            if [[ $COMPLIANT_COUNT -gt 0 ]]; then
+              echo "### ✅ Compliant Components" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>Click to expand ($COMPLIANT_COUNT components)</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+
+              tail -n +2 "$CSV_FILE" | while IFS=',' read -r component scan_time promoted_time promotion_status hermetic_status ec_status multiarch_status push_status push_url ec_url; do
+                # Check if this component is fully compliant
+                if ! [[ "$promotion_status" =~ (Failed|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE) ]] && \
+                   [[ "$hermetic_status" != "Not Enabled" ]] && \
+                   [[ "$ec_status" != "Not Compliant" ]] && \
+                   [[ "$multiarch_status" != "Not Enabled" ]] && \
+                   [[ "$push_status" != "Failed" ]]; then
+                  echo "- \`$component\`" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+
+          else
+            echo "⚠️ CSV file not found: $CSV_FILE" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # JIRA Integration Summary
+          echo "### 🎫 JIRA Integration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ -f "$JIRA_LOG" ]]; then
+            # Extract JIRA statistics from log
+            CREATED=$(grep -c "Created issue" "$JIRA_LOG" 2>/dev/null || echo "0")
+            UPDATED=$(grep -c "Updated issue" "$JIRA_LOG" 2>/dev/null || echo "0")
+            CLOSED=$(grep -c "Closed issue" "$JIRA_LOG" 2>/dev/null || echo "0")
+            SKIPPED=$(grep -c "is compliant - skipping" "$JIRA_LOG" 2>/dev/null || echo "0")
+
+            echo "| Action | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Issues Created | $CREATED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Issues Updated | $UPDATED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Issues Auto-Closed | $CLOSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Skipped (Compliant) | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Extract and list created issues
+            if [[ $CREATED -gt 0 ]]; then
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>Created Issues</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              grep "Created issue" "$JIRA_LOG" | while read -r line; do
+                # Extract issue key and component from the log line
+                ISSUE_KEY=$(echo "$line" | grep -oE '[A-Z]+-[0-9]+' | head -1)
+                if [[ -n "$ISSUE_KEY" ]]; then
+                  echo "- [$ISSUE_KEY](https://issues.redhat.com/browse/$ISSUE_KEY)" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Extract and list updated issues
+            if [[ $UPDATED -gt 0 ]]; then
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>Updated Issues</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              grep "Updated issue" "$JIRA_LOG" | while read -r line; do
+                ISSUE_KEY=$(echo "$line" | grep -oE '[A-Z]+-[0-9]+' | head -1)
+                if [[ -n "$ISSUE_KEY" ]]; then
+                  echo "- [$ISSUE_KEY](https://issues.redhat.com/browse/$ISSUE_KEY)" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Extract and list closed issues
+            if [[ $CLOSED -gt 0 ]]; then
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>Auto-Closed Issues</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              grep "Closed issue" "$JIRA_LOG" | while read -r line; do
+                ISSUE_KEY=$(echo "$line" | grep -oE '[A-Z]+-[0-9]+' | head -1)
+                if [[ -n "$ISSUE_KEY" ]]; then
+                  echo "- [$ISSUE_KEY](https://issues.redhat.com/browse/$ISSUE_KEY)" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "ℹ️ JIRA integration log not available" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Add artifacts info
+          echo "### 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`data/${{ matrix.application }}-compliance.csv\` | Compliance scan results |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`logs/${{ matrix.application }}-compliance-scan.log\` | Scan execution log |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`logs/${{ matrix.application }}-jira-creation.log\` | JIRA operations log |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`logs/${{ matrix.application }}-jira-issues.json\` | JIRA issues JSON |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Console output
           echo "=================================================="
           echo "Compliance Scan Completed Successfully"
           echo "=================================================="

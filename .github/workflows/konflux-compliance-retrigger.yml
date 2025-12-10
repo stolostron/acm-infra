@@ -466,9 +466,115 @@ jobs:
             ${{ github.workspace }}/logs/${{ matrix.application }}-*.log
           retention-days: 30
 
-      - name: Summary
+      - name: Generate Summary
         if: steps.should_run.outputs.skip != 'true'
         run: |
+          CSV_FILE="${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv"
+
+          echo "## 🔄 Compliance Retrigger: ${{ matrix.application }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ -f "$CSV_FILE" ]]; then
+            # Count total components (excluding header)
+            TOTAL_COMPONENTS=$(tail -n +2 "$CSV_FILE" | wc -l | tr -d ' ')
+
+            # Count components by status
+            FAILED_PUSH=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $8}' | grep -c "Failed" || echo "0")
+            NOT_COMPLIANT=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $6}' | grep -c "Not Compliant" || echo "0")
+            HERMETIC_DISABLED=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $5}' | grep -c "Not Enabled" || echo "0")
+            MULTIARCH_DISABLED=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $7}' | grep -c "Not Enabled" || echo "0")
+            PROMOTION_FAILED=$(tail -n +2 "$CSV_FILE" | awk -F',' '{print $4}' | grep -cE "(Failed|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE)" || echo "0")
+
+            # Calculate passed components
+            TOTAL_ISSUES=$((FAILED_PUSH + NOT_COMPLIANT + HERMETIC_DISABLED + MULTIARCH_DISABLED + PROMOTION_FAILED))
+
+            echo "### 📊 Overview" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Total Components Scanned | $TOTAL_COMPONENTS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Components with Issues | $TOTAL_ISSUES |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Show breakdown of failures
+            echo "### ❌ Failure Breakdown" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Check Type | Failed Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|------------|--------------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Push Pipeline | $FAILED_PUSH |" >> $GITHUB_STEP_SUMMARY
+            echo "| Enterprise Contract | $NOT_COMPLIANT |" >> $GITHUB_STEP_SUMMARY
+            echo "| Hermetic Builds | $HERMETIC_DISABLED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Multiarch Support | $MULTIARCH_DISABLED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Image Promotion | $PROMOTION_FAILED |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # List failed components with details
+            echo "### 📋 Failed Components" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Check if there are any failed components
+            FAILED_LINES=$(tail -n +2 "$CSV_FILE" | awk -F',' '
+              $4 ~ /(Failed|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE)/ ||
+              $5 == "Not Enabled" ||
+              $6 == "Not Compliant" ||
+              $7 == "Not Enabled" ||
+              $8 == "Failed"
+            ')
+
+            if [[ -n "$FAILED_LINES" ]]; then
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>Click to expand failed components list</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Component | Promotion | Hermetic | EC | Multiarch | Push | Pipeline Link |" >> $GITHUB_STEP_SUMMARY
+              echo "|-----------|-----------|----------|----|-----------| -----|---------------|" >> $GITHUB_STEP_SUMMARY
+
+              tail -n +2 "$CSV_FILE" | while IFS=',' read -r component scan_time promoted_time promotion_status hermetic_status ec_status multiarch_status push_status push_url ec_url; do
+                # Check if this component has any failure
+                if [[ "$promotion_status" =~ (Failed|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE) ]] || \
+                   [[ "$hermetic_status" == "Not Enabled" ]] || \
+                   [[ "$ec_status" == "Not Compliant" ]] || \
+                   [[ "$multiarch_status" == "Not Enabled" ]] || \
+                   [[ "$push_status" == "Failed" ]]; then
+                  # Format status with emojis
+                  PROMO_ICON=$([[ "$promotion_status" =~ (Failed|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE) ]] && echo "❌" || echo "✅")
+                  HERMETIC_ICON=$([[ "$hermetic_status" == "Not Enabled" ]] && echo "❌" || echo "✅")
+                  EC_ICON=$([[ "$ec_status" == "Not Compliant" ]] && echo "❌" || echo "✅")
+                  MULTIARCH_ICON=$([[ "$multiarch_status" == "Not Enabled" ]] && echo "❌" || echo "✅")
+                  PUSH_ICON=$([[ "$push_status" == "Failed" ]] && echo "❌" || echo "✅")
+
+                  # Create pipeline link
+                  if [[ -n "$push_url" && "$push_url" != "null" ]]; then
+                    LINK="[View]($push_url)"
+                  else
+                    LINK="-"
+                  fi
+
+                  echo "| \`$component\` | $PROMO_ICON | $HERMETIC_ICON | $EC_ICON | $MULTIARCH_ICON | $PUSH_ICON | $LINK |" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "✅ All components are compliant!" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+          else
+            echo "⚠️ CSV file not found: $CSV_FILE" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Add artifacts info
+          echo "### 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **CSV Data:** \`data/${{ matrix.application }}-compliance.csv\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Retrigger Log:** \`logs/${{ matrix.application }}-compliance-retrigger.log\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Console output
           echo "=================================================="
           echo "Compliance Retrigger Completed Successfully"
           echo "=================================================="
