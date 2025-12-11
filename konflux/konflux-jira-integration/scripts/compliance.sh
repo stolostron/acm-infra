@@ -215,6 +215,31 @@ get_component_repository() {
     fi
 }
 
+# Function to check if component has null status exception
+# Args: component_name, check_type (ec or push)
+# Returns: 0 if should skip null check, 1 otherwise
+has_null_exception() {
+    local component_name="$1"
+    local check_type="$2"
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local exceptions_file="$script_dir/compliance-exceptions.yaml"
+
+    # Return false if exceptions file doesn't exist
+    if [[ ! -f "$exceptions_file" ]]; then
+        return 1
+    fi
+
+    # Query if component has exception for this check type
+    local has_exception=$(yq ".exceptions[] | select(.konflux_component == \"$component_name\") | .skip_null_checks[] | select(. == \"$check_type\")" "$exceptions_file" 2>/dev/null)
+
+    if [[ -n "$has_exception" ]]; then
+        debug_echo "[debug] Component $component_name has null exception for $check_type check"
+        return 0  # true - should skip null check
+    fi
+
+    return 1  # false - no exception
+}
+
 echo "Checking for Github auth token"
 authorization=""
 if [ -f "authorization.txt" ]; then
@@ -667,7 +692,13 @@ check_enterprise_contract() {
     else
         echo "🟥 $repo $ecname: FAILURE (ec was: \"$ec\")" >&3
         if [[ -z "$ec" ]]; then
-            echo "EC_BLANK|$ec_url"
+            # Check for null exception
+            if has_null_exception "$line" "ec"; then
+                echo "🟡 $repo $ecname: SKIPPED (null status excepted)" >&3
+                echo "EC_SKIPPED_NULL|$ec_url"
+            else
+                echo "EC_BLANK|$ec_url"
+            fi
         elif [[ "$ec" == "cancelled" ]]; then
             echo "EC_CANCELED|$ec_url"
         else
@@ -712,8 +743,14 @@ check_component_on_push() {
         echo "🟩 $repo $pushname: SUCCESS" >&3
         echo "Successful|$push_url"
     else
-        echo "🟥 $repo $pushname: FAILURE (status was: \"$push_status\")" >&3
-        echo "Failed|$push_url"
+        # Check if null status should be skipped
+        if [[ -z "$push_status" ]] && has_null_exception "$line" "push"; then
+            echo "🟡 $repo $pushname: SKIPPED (null status excepted)" >&3
+            echo "Skipped_Null|$push_url"
+        else
+            echo "🟥 $repo $pushname: FAILURE (status was: \"$push_status\")" >&3
+            echo "Failed|$push_url"
+        fi
     fi
 }
 
@@ -867,6 +904,9 @@ for line in $components; do
         else
             ec_status="Push Failure"
         fi
+    elif [[ "$ec_status" == "EC_SKIPPED_NULL" ]]; then
+        # Component has null exception - treat as skipped
+        ec_status="Skipped (Null)"
     fi
 
     data="$data,$ec_status"
@@ -887,8 +927,11 @@ for line in $components; do
 
     # Retrigger component if build failed and --retrigger flag is set
     if [[ "$retrigger" == "true" ]]; then
+        # Skip retriggering for components with skipped null status
+        if echo "$data" | grep -qE "(^|,)(Skipped_Null|Skipped \(Null\))(,|$)"; then
+            debug_echo "[debug] Skipping retrigger for $line - null status is excepted"
         # Check if component has any failures (Push Failure or actual Failed status, but not Successful)
-        if echo "$data" | grep -qE "(^|,)(Failed|Push Failure|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE|Not Enabled|Not Compliant)(,|$)"; then
+        elif echo "$data" | grep -qE "(^|,)(Failed|Push Failure|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE|Not Enabled|Not Compliant)(,|$)"; then
             echo "🔄 Retriggering component: $line" >&3
             kubectl annotate components/$line build.appstudio.openshift.io/request=trigger-pac-build --overwrite
             if [ $? -eq 0 ]; then
