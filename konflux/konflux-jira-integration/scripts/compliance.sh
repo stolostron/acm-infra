@@ -90,6 +90,8 @@ if [[ ! "$oc_project_output" == *"Using project \"crt-redhat-acm-tenant\""* ]]; 
 fi
 echo "Verified: In correct OpenShift project (crt-redhat-acm-tenant)"
 
+component_yaml=$(oc get components -oyaml)
+
 mkdir -p data
 compliancefile="data/$application-compliance.csv"
 
@@ -166,7 +168,12 @@ get_squad_components() {
     # Convert squad_key from kebab-case to Title Case for matching
     # e.g., "server-foundation" -> "Server Foundation"
     local squad_name
-    squad_name=$(echo "$squad_key" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2));}1')
+    # Handle all-uppercase squad keys
+    if [[ $squad_key != $(echo "$squad_key" | tr '[:lower:]' '[:upper:]') ]]; then
+        squad_name=$(echo "$squad_key" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2));}1')
+    else
+        squad_name=$squad_key
+    fi
     debug_echo "[debug] Squad Name (normalized): $squad_name"
 
     # Query components by squad field
@@ -390,7 +397,7 @@ check_promoted() {
     local line="$1"
     local skopeo_mac_args="$2"
 
-    promoted=$(oc get component $line -oyaml | yq ".status.lastPromotedImage")
+    promoted=$(echo "$component_yaml" | yq ".items[] | select(.metadata.name == \"$line\") | .status.lastPromotedImage")
     if [[ "$promoted" == "null" || -z "$promoted" ]]; then
         # failed to get image
         # echo "failed to get image"
@@ -775,9 +782,9 @@ elif [[ -n "$squad" ]]; then
         exit 1
     fi
     # Filter by application
-    components=$(oc get components | grep $application | awk '{print $1}' | grep -F -f <(echo "$squad_components"))
+    components=$(echo "$component_yaml" | yq '.items[] | select(.spec.application == "release-'"$application"'") | .metadata.name' | grep -F -f <(echo "$squad_components"))
 else
-    components=$(oc get components | grep $application | awk '{print $1}')
+    components=$(echo "$component_yaml" | yq '.items[] | select(.spec.application == "release-'"$application"'") | .metadata.name')
 fi
 
 # Component processing delay (in seconds) to avoid GitHub API rate limits
@@ -806,8 +813,8 @@ for line in $components; do
     # Extract build time from data (format: "buildtime,status")
     build_time="${data%%,*}"
 
-    url=$(oc get component "$line" -oyaml | yq ".spec.source.git.url")
-    branch=$(oc get component "$line" -oyaml | yq ".spec.source.git.revision")
+    url=$(echo "$component_yaml" | yq ".items[] | select(.metadata.name == \"$line\") | .spec.source.git.url")
+    branch=$(echo "$component_yaml" | yq ".items[] | select(.metadata.name == \"$line\") | .spec.source.git.revision")
     org=$(basename "$(dirname "$url")")
     repo=$(basename $url)
 
