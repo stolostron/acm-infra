@@ -4,13 +4,13 @@ exec 3>&1
 
 # Debug output function
 debug_echo() {
-  if [ "$debug" = true ]; then
-    echo "$@" >&3
-  fi
+    if [ "$debug" = true ]; then
+        echo "$@" >&3
+    fi
 }
 
 show_help() {
-    cat << EOF
+    cat <<EOF
 Usage: compliance.sh [OPTIONS] <application>
 
 Check compliance status for Konflux components
@@ -37,39 +37,39 @@ EOF
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --debug=*)
-            debug="${1#*=}"
-            shift
-            ;;
-        --debug)
-            debug=true
-            shift
-            ;;
-        --retrigger)
-            retrigger=true
-            shift
-            ;;
-        --squad=*)
-            squad="${1#*=}"
-            shift
-            ;;
-        -h|--help)
-            show_help=true
-            shift
-            ;;
-        -*)
-            echo "Unknown option $1"
+    --debug=*)
+        debug="${1#*=}"
+        shift
+        ;;
+    --debug)
+        debug=true
+        shift
+        ;;
+    --retrigger)
+        retrigger=true
+        shift
+        ;;
+    --squad=*)
+        squad="${1#*=}"
+        shift
+        ;;
+    -h | --help)
+        show_help=true
+        shift
+        ;;
+    -*)
+        echo "Unknown option $1"
+        exit 1
+        ;;
+    *)
+        if [[ -z "$application" ]]; then
+            application=$1
+        else
+            echo "Multiple applications specified: $application and $1"
             exit 1
-            ;;
-        *)
-            if [[ -z "$application" ]]; then
-                application=$1
-            else
-                echo "Multiple applications specified: $application and $1"
-                exit 1
-            fi
-            shift
-            ;;
+        fi
+        shift
+        ;;
     esac
 done
 
@@ -90,18 +90,19 @@ if [[ ! "$oc_project_output" == *"Using project \"crt-redhat-acm-tenant\""* ]]; 
 fi
 echo "Verified: In correct OpenShift project (crt-redhat-acm-tenant)"
 
+component_yaml=$(oc get components -oyaml)
+
 mkdir -p data
 compliancefile="data/$application-compliance.csv"
-> $compliancefile
+
+# Write CSV header
+echo "Konflux Component,Scan Time,Promoted Time,Promoted Status,Hermetic Builds,Enterprise Contract,Multiarch Support,Push Status,Push PipelineRun URL,EC PipelineRun URL" >$compliancefile
 
 # Capture scan time (when this script runs)
 SCAN_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Image staleness threshold (2 weeks in seconds)
 IMAGE_STALE_THRESHOLD=$((14 * 24 * 60 * 60))
-
-# Write CSV header
-echo "Konflux Component,Scan Time,Promoted Time,Promoted Status,Hermetic Builds,Enterprise Contract,Multiarch Support,Push Status,Push PipelineRun URL,EC PipelineRun URL" > $compliancefile
 
 # Function to check if image is stale (>2 weeks old) - log only, no CSV output
 check_image_stale() {
@@ -122,16 +123,17 @@ check_image_stale() {
         fi
 
         if [[ -n "$build_epoch" ]]; then
-            local current_epoch=$(date +%s)
+            local current_epoch
+            current_epoch=$(date +%s)
             local age_seconds=$((current_epoch - build_epoch))
             local age_days=$((age_seconds / 86400))
 
             if [[ $age_seconds -gt $IMAGE_STALE_THRESHOLD ]]; then
                 echo "🟥 $repo image stale: TRUE (${age_days} days old)" >&3
-                return 1  # stale
+                return 1 # stale
             else
                 echo "🟩 $repo image stale: FALSE (${age_days} days old)" >&3
-                return 0  # fresh
+                return 0 # fresh
             fi
         fi
     fi
@@ -145,7 +147,8 @@ check_image_stale() {
 get_squad_components() {
     local squad_key="$1"
     # Get the directory where this script is located
-    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     # Use component-registry.yaml from acm-config submodule
     local config_file="$script_dir/../../../acm-config/product/component-registry.yaml"
 
@@ -164,17 +167,25 @@ get_squad_components() {
 
     # Convert squad_key from kebab-case to Title Case for matching
     # e.g., "server-foundation" -> "Server Foundation"
-    local squad_name=$(echo "$squad_key" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2));}1')
+    local squad_name
+    # Handle all-uppercase squad keys
+    if [[ $squad_key != $(echo "$squad_key" | tr '[:lower:]' '[:upper:]') ]]; then
+        squad_name=$(echo "$squad_key" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2));}1')
+    else
+        squad_name=$squad_key
+    fi
     debug_echo "[debug] Squad Name (normalized): $squad_name"
 
     # Query components by squad field
-    local components=$(yq ".components[] | select(.squad == \"$squad_name\") | .konflux_component" "$config_file" 2>/dev/null)
+    local components
+    components=$(yq ".components[] | select(.squad == \"$squad_name\") | .konflux_component" "$config_file" 2>/dev/null)
 
     # If no exact match, show available squads
     if [[ -z "$components" ]]; then
         debug_echo "[debug] No components found for squad: $squad_name"
         # Get all unique squad values for error message
-        local available_squads=$(yq '.components[].squad' "$config_file" 2>/dev/null | sort -u | grep -v '^null$')
+        local available_squads
+        available_squads=$(yq '.components[].squad' "$config_file" 2>/dev/null | sort -u | grep -v '^null$')
 
         echo "Error: No components found for squad '$squad_key' (normalized: '$squad_name')" >&3
         echo "" >&3
@@ -195,7 +206,8 @@ get_squad_components() {
 # Function to get repository URL from component registry
 get_component_repository() {
     local component_name="$1"
-    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local config_file="$script_dir/../../../acm-config/product/component-registry.yaml"
 
     # Return empty if config file doesn't exist
@@ -205,7 +217,8 @@ get_component_repository() {
     fi
 
     # Query repository by konflux_component field
-    local repository=$(yq ".components[] | select(.konflux_component == \"$component_name\") | .repository" "$config_file" 2>/dev/null)
+    local repository
+    repository=$(yq ".components[] | select(.konflux_component == \"$component_name\") | .repository" "$config_file" 2>/dev/null)
 
     # Filter out empty/null values
     if [[ -n "$repository" && "$repository" != "null" ]]; then
@@ -218,44 +231,43 @@ get_component_repository() {
 echo "Checking for Github auth token"
 authorization=""
 if [ -f "authorization.txt" ]; then
-	authorization="Authorization: Bearer $(cat "authorization.txt")"
-	echo "Authorization found. Applying to github API requests"
+    authorization="Authorization: Bearer $(cat "authorization.txt")"
+    echo "Authorization found. Applying to github API requests"
 
-	# Check current GitHub API rate limit status
-	echo ""
-	echo "Checking GitHub API rate limit status..."
-	rate_limit_response=$(curl -s -H "$authorization" "https://api.github.com/rate_limit")
+    # Check current GitHub API rate limit status
+    echo ""
+    echo "Checking GitHub API rate limit status..."
 
-	if [ $? -eq 0 ]; then
-		core_limit=$(echo "$rate_limit_response" | yq -p=json '.rate.limit')
-		core_remaining=$(echo "$rate_limit_response" | yq -p=json '.rate.remaining')
-		core_used=$(echo "$rate_limit_response" | yq -p=json '.rate.used')
-		reset_timestamp=$(echo "$rate_limit_response" | yq -p=json '.rate.reset')
+    if rate_limit_response=$(curl -s --fail -H "$authorization" "https://api.github.com/rate_limit"); then
+        core_limit=$(echo "$rate_limit_response" | yq -p=json '.rate.limit')
+        core_remaining=$(echo "$rate_limit_response" | yq -p=json '.rate.remaining')
+        core_used=$(echo "$rate_limit_response" | yq -p=json '.rate.used')
+        reset_timestamp=$(echo "$rate_limit_response" | yq -p=json '.rate.reset')
 
-		# Calculate reset time
-		current_time=$(date +%s)
-		time_until_reset=$((reset_timestamp - current_time))
-		minutes_until_reset=$((time_until_reset / 60))
+        # Calculate reset time
+        current_time=$(date +%s)
+        time_until_reset=$((reset_timestamp - current_time))
+        minutes_until_reset=$((time_until_reset / 60))
 
-		echo "GitHub API Rate Limit Status:"
-		echo "  Limit:     $core_limit requests/hour"
-		echo "  Used:      $core_used"
-		echo "  Remaining: $core_remaining"
-		echo "  Resets in: ${minutes_until_reset} minutes (at $(date -r $reset_timestamp '+%Y-%m-%d %H:%M:%S'))"
+        echo "GitHub API Rate Limit Status:"
+        echo "  Limit:     $core_limit requests/hour"
+        echo "  Used:      $core_used"
+        echo "  Remaining: $core_remaining"
+        echo "  Resets in: ${minutes_until_reset} minutes (at $(date -r $reset_timestamp '+%Y-%m-%d %H:%M:%S'))"
 
-		# Warn if low on quota
-		usage_percent=$((core_used * 100 / core_limit))
-		if [ $core_remaining -lt 500 ]; then
-			echo "  ⚠️  WARNING: Less than 500 requests remaining!"
-		elif [ $usage_percent -gt 80 ]; then
-			echo "  ⚠️  WARNING: Over 80% quota used (${usage_percent}%)"
-		else
-			echo "  ✓ Sufficient quota available (${usage_percent}% used)"
-		fi
-	else
-		echo "⚠️  Could not fetch rate limit status"
-	fi
-	echo ""
+        # Warn if low on quota
+        usage_percent=$((core_used * 100 / core_limit))
+        if [ $core_remaining -lt 500 ]; then
+            echo "  ⚠️  WARNING: Less than 500 requests remaining!"
+        elif [ $usage_percent -gt 80 ]; then
+            echo "  ⚠️  WARNING: Over 80% quota used (${usage_percent}%)"
+        else
+            echo "  ✓ Sufficient quota available (${usage_percent}% used)"
+        fi
+    else
+        echo "⚠️  Could not fetch rate limit status"
+    fi
+    echo ""
 fi
 
 # GitHub API call with simple rate limiting and retry logic
@@ -292,9 +304,7 @@ github_api_call() {
                 echo "" >&3
 
                 if [[ -n "$authorization" ]]; then
-                    rate_limit_response=$(curl -s -H "$authorization" "https://api.github.com/rate_limit" 2>&1)
-
-                    if [ $? -eq 0 ]; then
+                    if rate_limit_response=$(curl -s --fail -H "$authorization" "https://api.github.com/rate_limit" 2>&1); then
                         # Try to parse rate limit details
                         core_limit=$(echo "$rate_limit_response" | yq -p=json '.rate.limit' 2>/dev/null)
                         core_remaining=$(echo "$rate_limit_response" | yq -p=json '.rate.remaining' 2>/dev/null)
@@ -386,16 +396,15 @@ fi
 check_promoted() {
     local line="$1"
     local skopeo_mac_args="$2"
-    
-    promoted=$(oc get component $line -oyaml | yq ".status.lastPromotedImage")
+
+    promoted=$(echo "$component_yaml" | yq ".items[] | select(.metadata.name == \"$line\") | .status.lastPromotedImage")
     if [[ "$promoted" == "null" || -z "$promoted" ]]; then
         # failed to get image
         # echo "failed to get image"
         buildtime="IMAGE_PULL_FAILURE,Failed"
     elif [[ "$promoted" =~ sha256:[a-f0-9]{64}$ ]]; then
         # found image
-        skopeo=$(skopeo $skopeo_mac_args inspect "docker://$promoted" 2>/dev/null)
-        if [ $? -ne 0 ]; then
+        if ! skopeo=$(skopeo $skopeo_mac_args inspect "docker://$promoted" 2>/dev/null); then
             # inspection failed
             buildtime="INSPECTION_FAILURE,Failed"
         else
@@ -405,7 +414,7 @@ check_promoted() {
         # invalid or incomplete digest
         buildtime="DIGEST_FAILURE,Failed"
     fi
-    
+
     echo "$buildtime"
 }
 
@@ -416,9 +425,9 @@ check_hermetic_builds() {
     local authorization="$3"
     local org="$4"
     local repo="$5"
-    
+
     hermeticbuilds=true
-    
+
     # Check pathInRepo (first .spec, then fallback to .spec.pipelineSpec)
     pathinrepo=$(echo "$yaml" | yq ".spec.pipelineRef.params | .[] | select(.name==\"pathInRepo\")" 2>&1)
     if echo "$pathinrepo" | grep -q "Error:"; then
@@ -493,8 +502,8 @@ check_hermetic_builds() {
             fi
             debug_echo "[debug] build-source-image (pull): using .spec.pipelineSpec.params.default = $pull_bsi"
         fi
-        
-        if [[ !($buildsourceimage == true || $buildsourceimage == "true") || !($pull_bsi == true || $pull_bse == "true") ]]; then
+
+        if [[ $buildsourceimage != "true" ]] || [[ $pull_bsi != "true" ]]; then
             hermeticbuilds=false
         fi
 
@@ -532,19 +541,18 @@ check_hermetic_builds() {
             fi
             debug_echo "[debug] hermetic (pull): using .spec.pipelineSpec.params.default = $pull_hermetic"
         fi
-        
-        if [[ $hermetic != true || $hermetic != "true" || $pull_hermetic != true || $pull_hermetic != "true" ]]; then
+
+        if [[ $hermetic != "true" ]] || [[ $pull_hermetic != "true" ]]; then
             hermeticbuilds=false
         fi
     fi
 
-    vendor_response=$(github_api_call "https://api.github.com/repos/$org/$repo/contents/vendor")
-    if [ $? -eq 0 ] && [ -n "$vendor_response" ]; then
+    if vendor_response=$(github_api_call "https://api.github.com/repos/$org/$repo/contents/vendor") && [ -n "$vendor_response" ]; then
         vendor="200"
     else
         vendor="404"
     fi
-    
+
     # Check prefetch-input (first .spec.params.value, then fallback to .spec.pipelineSpec.params.default)
     prefetch=$(echo "$yaml" | yq ".spec.params | .[] | select(.name==\"prefetch-input\") | .value" 2>&1)
     if echo "$prefetch" | grep -q "Error:"; then
@@ -579,7 +587,7 @@ check_hermetic_builds() {
         fi
         debug_echo "[debug] prefetch-input (pull): using .spec.pipelineSpec.params.default = $pull_prefetch"
     fi
-    
+
     # echo "$prefetch $pull_prefetch"
     # echo -e "Prefetch: $prefetch\nPullPrefetch: $pull_prefetch\nVendor: $vendor"
     if [[ ($prefetch == "" || $pull_prefetch == "") && $vendor != "200" ]]; then
@@ -661,7 +669,7 @@ check_enterprise_contract() {
     ec_url=$(echo "$output_text" | sed -n 's/.*href="\(https:\/\/konflux-ui[^"]*pipelinerun\/[^"]*\)".*/\1/p' | head -1)
     debug_echo "[debug] EC ec=$ec, ec_url=$ec_url"
 
-    if [[ -n "$ec" ]] && ! echo "$ec" | grep -v "^success$" > /dev/null; then
+    if [[ -n "$ec" ]] && ! echo "$ec" | grep -v "^success$" >/dev/null; then
         echo "🟩 $repo $ecname: SUCCESS" >&3
         echo "Compliant|$ec_url"
     else
@@ -708,7 +716,7 @@ check_component_on_push() {
     fi
     debug_echo "[debug] Push push_status=$push_status, push_url=$push_url"
 
-    if [[ -n "$push_status" ]] && ! echo "$push_status" | grep -v "^success$" > /dev/null; then
+    if [[ -n "$push_status" ]] && ! echo "$push_status" | grep -v "^success$" >/dev/null; then
         echo "🟩 $repo $pushname: SUCCESS" >&3
         echo "Successful|$push_url"
     else
@@ -741,7 +749,7 @@ check_multiarch_support() {
     fi
 
     platforms=$(echo "$platforms_value" | wc -l | tr -d ' \t\n')
-    if  [[ $platforms != 4 ]]; then
+    if [[ $platforms != 4 ]]; then
         echo "🟥 $repo Multiarch: FALSE" >&3
         echo "Not Enabled"
     else
@@ -753,7 +761,7 @@ check_multiarch_support() {
 # Function to check if component is a bundle operator
 check_bundle_operator() {
     local component="$1"
-    
+
     # Check if component starts with "mce-operator-bundle" or "acm-operator-bundle"
     if [[ "$component" == mce-operator-bundle* || "$component" == acm-operator-bundle* ]]; then
         echo "🟡 $component Bundle Operator: TRUE" >&3
@@ -774,9 +782,9 @@ elif [[ -n "$squad" ]]; then
         exit 1
     fi
     # Filter by application
-    components=$(oc get components | grep $application | awk '{print $1}' | grep -F -f <(echo "$squad_components"))
+    components=$(echo "$component_yaml" | yq '.items[] | select(.spec.application == "release-'"$application"'") | .metadata.name' | grep -F -f <(echo "$squad_components"))
 else
-    components=$(oc get components | grep $application | awk '{print $1}')
+    components=$(echo "$component_yaml" | yq '.items[] | select(.spec.application == "release-'"$application"'") | .metadata.name')
 fi
 
 # Component processing delay (in seconds) to avoid GitHub API rate limits
@@ -805,9 +813,9 @@ for line in $components; do
     # Extract build time from data (format: "buildtime,status")
     build_time="${data%%,*}"
 
-    url=$(oc get component "$line" -oyaml | yq ".spec.source.git.url")
-    branch=$(oc get component "$line" -oyaml | yq ".spec.source.git.revision")
-    org=$(basename $(dirname $url))
+    url=$(echo "$component_yaml" | yq ".items[] | select(.metadata.name == \"$line\") | .spec.source.git.url")
+    branch=$(echo "$component_yaml" | yq ".items[] | select(.metadata.name == \"$line\") | .spec.source.git.revision")
+    org=$(basename "$(dirname "$url")")
     repo=$(basename $url)
 
     push="https://raw.githubusercontent.com/$org/$repo/refs/heads/$branch/.tekton/$line-push.yaml"
@@ -883,15 +891,14 @@ for line in $components; do
 
     echo ""
 
-    echo "$line,$SCAN_TIME,$data" >> $compliancefile
+    echo "$line,$SCAN_TIME,$data" >>$compliancefile
 
     # Retrigger component if build failed and --retrigger flag is set
     if [[ "$retrigger" == "true" ]]; then
         # Check if component has any failures (Push Failure or actual Failed status, but not Successful)
         if echo "$data" | grep -qE "(^|,)(Failed|Push Failure|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE|Not Enabled|Not Compliant)(,|$)"; then
             echo "🔄 Retriggering component: $line" >&3
-            kubectl annotate components/$line build.appstudio.openshift.io/request=trigger-pac-build --overwrite
-            if [ $? -eq 0 ]; then
+            if kubectl annotate components/$line build.appstudio.openshift.io/request=trigger-pac-build --overwrite; then
                 echo "✅ Successfully triggered rebuild for $line" >&3
             else
                 echo "❌ Failed to trigger rebuild for $line" >&3
