@@ -1,0 +1,163 @@
+name: Update acm-config Submodule
+
+on:
+  schedule:
+    # Run at 1:00 AM EST (6:00 UTC), every day
+    - cron: '0 6 * * *'
+
+  workflow_dispatch:
+    inputs:
+      create_pr:
+        description: 'Create a PR instead of pushing directly to main'
+        type: boolean
+        default: false
+
+jobs:
+  update-submodule:
+    name: Update acm-config to latest
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+          submodules: 'recursive'
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get current submodule commit
+        id: current
+        run: |
+          CURRENT_COMMIT=$(git submodule status acm-config | awk '{print $1}' | tr -d '+')
+          echo "commit=$CURRENT_COMMIT" >> $GITHUB_OUTPUT
+          echo "Current acm-config commit: $CURRENT_COMMIT"
+
+      - name: Update acm-config submodule
+        run: |
+          echo "Updating acm-config submodule to latest..."
+          git submodule update --remote acm-config
+
+      - name: Get new submodule commit
+        id: new
+        run: |
+          NEW_COMMIT=$(git submodule status acm-config | awk '{print $1}' | tr -d '+')
+          echo "commit=$NEW_COMMIT" >> $GITHUB_OUTPUT
+          echo "New acm-config commit: $NEW_COMMIT"
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet acm-config; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes detected in acm-config submodule"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Changes detected in acm-config submodule"
+          fi
+
+      - name: Get commit details
+        if: steps.changes.outputs.has_changes == 'true'
+        id: commit_info
+        run: |
+          cd acm-config
+          # Get commits between old and new
+          COMMIT_COUNT=$(git rev-list --count ${{ steps.current.outputs.commit }}..${{ steps.new.outputs.commit }} 2>/dev/null || echo "0")
+          echo "commit_count=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+
+          # Get short log of changes
+          if [[ "$COMMIT_COUNT" -gt 0 ]]; then
+            COMMIT_LOG=$(git log --oneline ${{ steps.current.outputs.commit }}..${{ steps.new.outputs.commit }} | head -10)
+            echo "Recent commits in acm-config:"
+            echo "$COMMIT_LOG"
+
+            # Store for PR body (escape for multiline)
+            echo "commit_log<<EOF" >> $GITHUB_OUTPUT
+            echo "$COMMIT_LOG" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+          cd ..
+
+      - name: Commit and push changes (direct to main)
+        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.create_pr != 'true'
+        run: |
+          git add acm-config
+          git commit -s -m "Update acm-config submodule to latest
+
+          Updated from ${{ steps.current.outputs.commit }} to ${{ steps.new.outputs.commit }}
+
+          Commits included: ${{ steps.commit_info.outputs.commit_count }}
+
+          🤖 Generated with GitHub Actions"
+
+          git push origin main
+          echo "✓ Changes pushed to main"
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.create_pr == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          BRANCH_NAME="update-acm-config-$(date +%Y%m%d)"
+
+          # Create and checkout new branch
+          git checkout -b "$BRANCH_NAME"
+
+          # Commit changes
+          git add acm-config
+          git commit -s -m "Update acm-config submodule to latest
+
+          Updated from ${{ steps.current.outputs.commit }} to ${{ steps.new.outputs.commit }}
+
+          Commits included: ${{ steps.commit_info.outputs.commit_count }}
+
+          🤖 Generated with GitHub Actions"
+
+          # Push branch
+          git push -u origin "$BRANCH_NAME"
+
+          # Create PR
+          gh pr create \
+            --title "Update acm-config submodule to latest" \
+            --body "$(cat <<'EOF'
+          ## Summary
+
+          This PR updates the acm-config submodule to the latest version.
+
+          - **Previous commit:** `${{ steps.current.outputs.commit }}`
+          - **New commit:** `${{ steps.new.outputs.commit }}`
+          - **Commits included:** ${{ steps.commit_info.outputs.commit_count }}
+
+          ### Recent commits in acm-config:
+          ```
+          ${{ steps.commit_info.outputs.commit_log }}
+          ```
+
+          🤖 Generated with GitHub Actions
+          EOF
+          )"
+
+          echo "✓ Pull Request created"
+
+      - name: Log completion
+        run: |
+          echo "=========================================="
+          echo "acm-config Submodule Update Complete"
+          echo "=========================================="
+          echo "Previous commit: ${{ steps.current.outputs.commit }}"
+          echo "New commit: ${{ steps.new.outputs.commit }}"
+          echo "Has changes: ${{ steps.changes.outputs.has_changes }}"
+          if [[ "${{ steps.changes.outputs.has_changes }}" == "true" ]]; then
+            echo "Commits included: ${{ steps.commit_info.outputs.commit_count }}"
+            if [[ "${{ github.event.inputs.create_pr }}" == "true" ]]; then
+              echo "Action: Created Pull Request"
+            else
+              echo "Action: Pushed directly to main"
+            fi
+          else
+            echo "Action: No update needed"
+          fi
