@@ -14,7 +14,37 @@ version: 1.0
 exceptions:
   # GRC team components - fast-forward workflow causes transient null status
   # before Konflux runs push builds, resulting in false-positive failures
+  - konflux_component: "acm-cli-acm"
+    skip_null_checks:
+      - ec
+      - push
+    reason: "GRC team fast-forward workflow causes transient null status before build runs"
+  - konflux_component: "cert-policy-controller-acm"
+    skip_null_checks:
+      - ec
+      - push
+    reason: "GRC team fast-forward workflow causes transient null status before build runs"
   - konflux_component: "config-policy-controller-acm"
+    skip_null_checks:
+      - ec
+      - push
+    reason: "GRC team fast-forward workflow causes transient null status before build runs"
+  - konflux_component: "governance-policy-addon-controller-acm"
+    skip_null_checks:
+      - ec
+      - push
+    reason: "GRC team fast-forward workflow causes transient null status before build runs"
+  - konflux_component: "governance-policy-framework-addon-acm"
+    skip_null_checks:
+      - ec
+      - push
+    reason: "GRC team fast-forward workflow causes transient null status before build runs"
+  - konflux_component: "governance-policy-propagator-acm"
+    skip_null_checks:
+      - ec
+      - push
+    reason: "GRC team fast-forward workflow causes transient null status before build runs"
+  - konflux_component: "must-gather-acm"
     skip_null_checks:
       - ec
       - push

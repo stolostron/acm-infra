@@ -691,7 +691,7 @@ check_enterprise_contract() {
         echo "Compliant|$ec_url"
     else
         echo "🟥 $repo $ecname: FAILURE (ec was: \"$ec\")" >&3
-        if [[ -z "$ec" ]]; then
+        if [[ -z "$ec" ]] || [[ "$ec" == "null" ]]; then
             # Check for null exception
             if has_null_exception "$line" "ec"; then
                 echo "🟡 $repo $ecname: SKIPPED (null status excepted)" >&3
@@ -744,7 +744,7 @@ check_component_on_push() {
         echo "Successful|$push_url"
     else
         # Check if null status should be skipped
-        if [[ -z "$push_status" ]] && has_null_exception "$line" "push"; then
+        if [[ -z "$push_status" || "$push_status" == "null" ]] && has_null_exception "$line" "push"; then
             echo "🟡 $repo $pushname: SKIPPED (null status excepted)" >&3
             echo "Skipped_Null|$push_url"
         else
@@ -927,9 +927,12 @@ for line in $components; do
 
     # Retrigger component if build failed and --retrigger flag is set
     if [[ "$retrigger" == "true" ]]; then
-        # Skip retriggering for components with skipped null status
+        # Skip retriggering for components with skipped null status (excepted)
         if echo "$data" | grep -qE "(^|,)(Skipped_Null|Skipped \(Null\))(,|$)"; then
             debug_echo "[debug] Skipping retrigger for $line - null status is excepted"
+        # Skip retriggering for components with null/blank status (nothing to retrigger)
+        elif echo "$data" | grep -qE "(^|,)(EC_BLANK|Push Failure)(,|$)" && [[ "$push_status" == "Failed" || "$push_status" == "null" || -z "$push_status" ]]; then
+            debug_echo "[debug] Skipping retrigger for $line - null status, nothing to retrigger"
         # Check if component has any failures (Push Failure or actual Failed status, but not Successful)
         elif echo "$data" | grep -qE "(^|,)(Failed|Push Failure|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE|Not Enabled|Not Compliant)(,|$)"; then
             echo "🔄 Retriggering component: $line" >&3
