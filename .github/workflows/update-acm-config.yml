@@ -6,22 +6,19 @@ on:
     - cron: '0 6 * * *'
 
   workflow_dispatch:
-    inputs:
-      direct_push:
-        description: 'Push directly to main instead of creating a PR (requires write access)'
-        type: boolean
-        default: false
 
 jobs:
   update-submodule:
     name: Update acm-config to latest
     runs-on: ubuntu-latest
+    # Use the default GITHUB_TOKEN (not a custom PAT secret) for authentication
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GH_PAT }}
           submodules: 'recursive'
           fetch-depth: 0
 
@@ -74,16 +71,11 @@ jobs:
             COMMIT_LOG=$(git log --oneline ${{ steps.current.outputs.commit }}..${{ steps.new.outputs.commit }} | head -10)
             echo "Recent commits in acm-config:"
             echo "$COMMIT_LOG"
-
-            # Store for PR body (escape for multiline)
-            echo "commit_log<<EOF" >> $GITHUB_OUTPUT
-            echo "$COMMIT_LOG" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
           fi
           cd ..
 
-      - name: Commit and push changes (direct to main)
-        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.direct_push == 'true'
+      - name: Commit and push changes
+        if: steps.changes.outputs.has_changes == 'true'
         run: |
           git add acm-config
           git commit -s -m "Update acm-config submodule to latest
@@ -97,56 +89,6 @@ jobs:
           git push origin main
           echo "✓ Changes pushed to main"
 
-      - name: Create Pull Request
-        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.direct_push != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          BRANCH_NAME="update-acm-config-$(date +%Y%m%d)"
-
-          # Create and checkout new branch
-          git checkout -b "$BRANCH_NAME"
-
-          # Commit changes
-          git add acm-config
-          git commit -s -m "Update acm-config submodule to latest
-
-          Updated from ${{ steps.current.outputs.commit }} to ${{ steps.new.outputs.commit }}
-
-          Commits included: ${{ steps.commit_info.outputs.commit_count }}
-
-          🤖 Generated with GitHub Actions"
-
-          # Push branch
-          git push -u origin "$BRANCH_NAME"
-
-          # Create PR
-          gh pr create \
-            --title "Update acm-config submodule to latest" \
-            --body "$(cat <<'EOF'
-          ## Summary
-
-          This PR updates the acm-config submodule to the latest version.
-
-          - **Previous commit:** `${{ steps.current.outputs.commit }}`
-          - **New commit:** `${{ steps.new.outputs.commit }}`
-          - **Commits included:** ${{ steps.commit_info.outputs.commit_count }}
-
-          ### Recent commits in acm-config:
-          ```
-          ${{ steps.commit_info.outputs.commit_log }}
-          ```
-
-          🤖 Generated with GitHub Actions
-          EOF
-          )"
-
-          echo "✓ Pull Request created"
-
-          # Enable auto-merge for the PR
-          gh pr merge --auto --squash
-          echo "✓ Auto-merge enabled"
-
       - name: Log completion
         run: |
           echo "=========================================="
@@ -157,11 +99,7 @@ jobs:
           echo "Has changes: ${{ steps.changes.outputs.has_changes }}"
           if [[ "${{ steps.changes.outputs.has_changes }}" == "true" ]]; then
             echo "Commits included: ${{ steps.commit_info.outputs.commit_count }}"
-            if [[ "${{ github.event.inputs.direct_push }}" == "true" ]]; then
-              echo "Action: Pushed directly to main"
-            else
-              echo "Action: Created Pull Request with auto-merge enabled"
-            fi
+            echo "Action: Pushed to main"
           else
             echo "Action: No update needed"
           fi
