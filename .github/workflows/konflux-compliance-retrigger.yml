@@ -5,6 +5,14 @@ on:
     # Run at midnight EST (5:00 UTC), every day
     - cron: '0 5 * * *'
 
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/konflux-compliance-retrigger.yml'
+      - 'konflux/konflux-jira-integration/**'
+      - 'acm-config/**'
+
   workflow_dispatch:
     inputs:
       application:
@@ -52,9 +60,20 @@ jobs:
       - name: Check if should run
         id: should_run
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          MATRIX_APP="${{ matrix.application }}"
+
+          # For pull_request events, only run latest versions for validation
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Only test latest ACM and MCE versions in PRs
+            if [[ "$MATRIX_APP" == "acm-216" || "$MATRIX_APP" == "mce-211" ]]; then
+              echo "skip=false" >> $GITHUB_OUTPUT
+              echo "Running $MATRIX_APP (PR validation mode - latest versions only)"
+            else
+              echo "skip=true" >> $GITHUB_OUTPUT
+              echo "Skipping $MATRIX_APP (PR validation mode - only testing latest versions)"
+            fi
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             APP_INPUT="${{ github.event.inputs.application }}"
-            MATRIX_APP="${{ matrix.application }}"
 
             # If "all", run everything
             if [[ "$APP_INPUT" == "all" ]]; then
@@ -90,7 +109,9 @@ jobs:
               echo "Skipping $MATRIX_APP (only running $APP_INPUT)"
             fi
           else
+            # For scheduled runs, run all applications
             echo "skip=false" >> $GITHUB_OUTPUT
+            echo "Running $MATRIX_APP (scheduled run)"
           fi
 
       - name: Cache CLI tools
