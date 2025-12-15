@@ -7,8 +7,8 @@ on:
 
   workflow_dispatch:
     inputs:
-      create_pr:
-        description: 'Create a PR instead of pushing directly to main'
+      direct_push:
+        description: 'Push directly to main instead of creating a PR (requires write access)'
         type: boolean
         default: false
 
@@ -83,7 +83,7 @@ jobs:
           cd ..
 
       - name: Commit and push changes (direct to main)
-        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.create_pr != 'true'
+        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.direct_push == 'true'
         run: |
           git add acm-config
           git commit -s -m "Update acm-config submodule to latest
@@ -98,7 +98,7 @@ jobs:
           echo "✓ Changes pushed to main"
 
       - name: Create Pull Request
-        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.create_pr == 'true'
+        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.direct_push != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -143,6 +143,10 @@ jobs:
 
           echo "✓ Pull Request created"
 
+          # Enable auto-merge for the PR
+          gh pr merge --auto --squash
+          echo "✓ Auto-merge enabled"
+
       - name: Log completion
         run: |
           echo "=========================================="
@@ -153,10 +157,10 @@ jobs:
           echo "Has changes: ${{ steps.changes.outputs.has_changes }}"
           if [[ "${{ steps.changes.outputs.has_changes }}" == "true" ]]; then
             echo "Commits included: ${{ steps.commit_info.outputs.commit_count }}"
-            if [[ "${{ github.event.inputs.create_pr }}" == "true" ]]; then
-              echo "Action: Created Pull Request"
-            else
+            if [[ "${{ github.event.inputs.direct_push }}" == "true" ]]; then
               echo "Action: Pushed directly to main"
+            else
+              echo "Action: Created Pull Request with auto-merge enabled"
             fi
           else
             echo "Action: No update needed"
