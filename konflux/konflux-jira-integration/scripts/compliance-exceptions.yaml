@@ -1,0 +1,30 @@
+# Compliance Exceptions Configuration
+# Components listed here will skip null status checks for specific check types
+# Use this for components with known workflows that cause transient null statuses
+#
+# Example:
+#   - reason: "Description of why this exception is needed"
+#     skip_null_checks:
+#       - ec      # Skip null Enterprise Contract check
+#       - push    # Skip null push pipeline check
+#     konflux_components:
+#       - my-component-acm
+#       - another-component-acm
+#
+version: 1.0
+
+exceptions:
+  # GRC team components - fast-forward workflow causes transient null status
+  # before Konflux runs push builds, resulting in false-positive failures
+  - reason: "GRC team fast-forward workflow causes transient null status before build runs"
+    skip_null_checks:
+      - ec
+      - push
+    konflux_components:
+      - acm-cli-acm
+      - cert-policy-controller-acm
+      - config-policy-controller-acm
+      - governance-policy-addon-controller-acm
+      - governance-policy-framework-addon-acm
+      - governance-policy-propagator-acm
+      - must-gather-acm

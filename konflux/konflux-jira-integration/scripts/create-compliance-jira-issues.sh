@@ -29,6 +29,8 @@ readonly STATUS_ENABLED="Enabled"
 readonly STATUS_IMAGE_PULL_FAILURE="IMAGE_PULL_FAILURE"
 readonly STATUS_INSPECTION_FAILURE="INSPECTION_FAILURE"
 readonly STATUS_DIGEST_FAILURE="DIGEST_FAILURE"
+readonly STATUS_SKIPPED_NULL="Skipped_Null"
+readonly STATUS_SKIPPED_NULL_EC="Skipped (Null)"
 
 # JIRA field constants
 readonly JIRA_ACTIVITY_TYPE="Quality / Stability / Reliability"
