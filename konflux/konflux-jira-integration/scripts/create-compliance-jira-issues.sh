@@ -334,13 +334,6 @@ is_non_compliant() {
     local push_status="$5"
     local promoted_time="$6"
 
-    # Check for skipped null status - not considered failures
-    # These are components with configured exceptions for transient null statuses
-    if [[ "$ec_status" == "$STATUS_SKIPPED_NULL_EC" ]] || \
-       [[ "$push_status" == "$STATUS_SKIPPED_NULL" ]]; then
-        return 1  # false - not non-compliant (skip issue creation)
-    fi
-
     # Check for promotion failures
     if [[ "$promotion_status" =~ ($STATUS_FAILED|$STATUS_IMAGE_PULL_FAILURE|$STATUS_INSPECTION_FAILURE|$STATUS_DIGEST_FAILURE) ]]; then
         return 0  # true - is non-compliant
