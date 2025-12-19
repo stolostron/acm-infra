@@ -234,7 +234,8 @@ get_component_repository() {
 has_null_exception() {
     local component_name="$1"
     local check_type="$2"
-    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local exceptions_file="$script_dir/compliance-exceptions.yaml"
 
     # Return false if exceptions file doesn't exist
@@ -243,7 +244,8 @@ has_null_exception() {
     fi
 
     # Query if component has exception for this check type
-    local has_exception=$(yq ".exceptions[] | select(.konflux_components[] | contains(\"$component_name\")) | .skip_null_checks[] | select(. == \"$check_type\")" "$exceptions_file" 2>/dev/null)
+    local has_exception
+    has_exception=$(yq ".exceptions[] | select(.konflux_components | any_c(. as \$pattern | \"${component_name}\" | contains(\$pattern))) | .skip_null_checks[] | select(. == \"$check_type\")" "$exceptions_file" 2>/dev/null)
 
     if [[ -n "$has_exception" ]]; then
         debug_echo "[debug] Component $component_name has null exception for $check_type check"
