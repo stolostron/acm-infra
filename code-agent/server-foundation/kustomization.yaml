@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace-scoped resources for server-foundation team
+#
+# The ClusterWorkflowTemplate is in shared/ directory and applied separately.
+# Use: argo submit --from clusterworkflowtemplate/code-agent-gemini -n server-foundation
+
+namespace: server-foundation
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - ../shared/namespace-resources  # Shared namespace-scoped resources (secrets, context, network-policy)
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: code-agent
+      app.kubernetes.io/component: server-foundation
+    includeSelectors: false

@@ -1,0 +1,218 @@
+# Example ConfigMaps for context aggregation
+#
+# These ConfigMaps can be referenced in workflow submissions using the
+# context-configmaps parameter:
+#
+#   argo submit --from workflowtemplate/code-agent-gemini \
+#     -p prompt="Review this code" \
+#     -p context-configmaps="coding-standards,security-policies"
+#
+# You can also select specific keys:
+#
+#   -p context-configmaps="acm-project-context:architecture.md"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-multi-repo-task-contexts
+  labels:
+    type: context
+data:
+  rules.md: |
+    # Rules for AI Agent
+
+    ## Safety First
+
+    - If a task has potential risk of damaging the system, DO NOT execute it
+    - When in doubt about safety implications, refuse to proceed and explain why
+
+    ## Git Commit Standards
+
+    - All commits must be signed: `git commit -s -m "your commit message"`
+    - Check the default branch (main or master) before creating PRs
+
+    ## Git Branch Naming (IMPORTANT)
+
+    When creating a new branch, **always append a random suffix** to avoid conflicts with existing branches:
+
+    ```bash
+    # Generate a random suffix (6 chars)
+    SUFFIX=$(head -c 6 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 6)
+    BRANCH_NAME="feature-name-${SUFFIX}"
+    git checkout -b "${BRANCH_NAME}"
+    ```
+
+    **Example**: Instead of `add-owners-file`, use `add-owners-file-a3b2c1`
+
+    ## Git Remote Verification (CRITICAL)
+
+    Before any git push or PR creation, you MUST verify the correct repository:
+
+    - **Always run `git remote -v`** to check the actual remote URL
+    - **Extract org/repo from remote URL**, do NOT infer from task description or directory name
+
+    ## Non-Interactive Commands (CRITICAL)
+
+    Since tasks run autonomously in the background, you MUST use non-interactive command forms:
+
+    - **Git push**: Always use `git push https://x-access-token:${GH_TOKEN}@github.com/<org>/<repo>.git <branch>` instead of `git push origin <branch>`
+      - Get `<org>/<repo>` from `git remote -v` output, NOT from assumptions
+      - **IMPORTANT**: Use `x-access-token` as username for GitHub App tokens
+    - **Git clone**: Use `git clone https://x-access-token:${GH_TOKEN}@github.com/<org>/<repo>.git` for private repos
+    - **Git remote**: Set remote URL with token: `git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/<org>/<repo>.git`
+    - **Never** use commands that prompt for username/password
+    - **Never** use interactive flags like `-i` or `--interactive`
+    - **Always** use `--no-edit` flag when applicable (e.g., `git merge --no-edit`)
+    - **Always** use `-y` or `--yes` flags for package managers (e.g., `apt-get -y install`)
+
+    ## Code and Documentation Standards
+
+    - Code must be written in English
+    - Comments must be written in English
+    - Commit messages must be written in English
+    - PR descriptions must be written in English
+  pr.md: |
+    # PR GUIDE
+
+    This guide tells the AI agent through making code changes and submitting them as a pull request.
+
+    ## Prerequisites
+
+    The repository has already been cloned in the current workspace.
+
+    ## Steps
+
+    ### 1. Identify Base Branch and Repository Info
+
+    First, identify the current branch and repository information:
+
+    ```bash
+    BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    echo "Base branch: $BASE_BRANCH"
+
+    # Get the remote URL to determine the repository
+    REMOTE_URL=$(git remote get-url origin)
+    echo "Remote URL: $REMOTE_URL"
+
+    # Extract owner and repo from the URL
+    # Format: https://github.com/<owner>/<repo>.git
+    REPO_OWNER=$(echo $REMOTE_URL | sed -E 's|.*github.com/([^/]+)/.*|\1|')
+    REPO_NAME=$(echo $REMOTE_URL | sed -E 's|.*github.com/[^/]+/([^.]+).*|\1|')
+    echo "Repository: $REPO_OWNER/$REPO_NAME"
+    ```
+
+    ### 2. Create Feature Branch
+
+    Create a new branch from the base branch:
+
+    ```bash
+    git checkout -b <descriptive-branch-name>
+    ```
+
+    ### 3. Execute the Task
+
+    Perform the required code changes as specified in the task description.
+
+    ### 4. Create and Submit Pull Request
+
+    After completing the task:
+
+    1. Commit the changes with a descriptive message (use -s for signoff)
+        ```bash
+        git commit -s -m "<commit message>"
+        ```
+
+    2. Push the branch and create PR:
+
+        ```bash
+        # Push directly to upstream
+        git push https://${GH_TOKEN}@github.com/$REPO_OWNER/$REPO_NAME.git <descriptive-branch-name>
+
+        # Create PR (no username prefix needed since branch is in upstream)
+        gh pr create --repo $REPO_OWNER/$REPO_NAME --base $BASE_BRANCH --head <descriptive-branch-name> --title "<title>" --body "<body>"
+  result-output.md: |
+    # Output Requirements
+
+    Before completing your task, you MUST create TWO output files:
+
+    ## 1. Summary Report: `/workspace/summary.md`
+
+    Create a human-readable Markdown report that includes:
+    - **Overall Status**: Brief description of success/failure
+    - **Actions Taken**: What was done during the task
+    - **Key Results**: Important outcomes, PR links, file changes, etc.
+    - **Issues/Errors**: Any problems encountered (if applicable)
+
+    Example `/workspace/summary.md`:
+    ```markdown
+    # Task Summary
+
+    ## Status: Success
+
+    ## Actions Taken
+    - Ran `go mod tidy` to clean up dependencies
+    - Created PR #123 with the changes
+
+    ## Results
+    - **PR URL**: https://github.com/stolostron/cluster-proxy/pull/123
+    - **Files Changed**: 2 (go.mod, go.sum)
+
+    ## Notes
+    No issues encountered.
+    ```
+
+    ## 2. Result JSON: `/workspace/result.json`
+
+    Create a structured JSON file with the following fields:
+
+    Required fields:
+    - `status`: "success" or "failed"
+    - `summary`: Brief one-line description of what was done
+    - `summary_file`: Always set to "/workspace/summary.md"
+
+    For repository tasks, also include:
+    - `org`: GitHub organization name (e.g., "stolostron")
+    - `repo`: Repository name (e.g., "cluster-proxy")
+    - `branch`: Branch name (e.g., "main")
+
+    Example for a repo task:
+    ```json
+    {
+      "status": "success",
+      "summary": "Created PR #123 with go mod tidy changes",
+      "summary_file": "/workspace/summary.md",
+      "org": "stolostron",
+      "repo": "cluster-proxy",
+      "branch": "main",
+      "pr_url": "https://github.com/stolostron/cluster-proxy/pull/123",
+      "files_changed": 2
+    }
+    ```
+
+    Example for analysis tasks:
+    ```json
+    {
+      "status": "success",
+      "summary": "Code review completed, found 3 issues",
+      "summary_file": "/workspace/summary.md",
+      "issues_count": 3
+    }
+    ```
+
+    Example for failed tasks:
+    ```json
+    {
+      "status": "failed",
+      "summary": "Build failed due to missing dependency",
+      "summary_file": "/workspace/summary.md",
+      "error": "module not found: github.com/example/pkg"
+    }
+    ```
+
+    ## IMPORTANT
+
+    - **Always create BOTH files**, even if the task fails
+    - The `summary.md` file is used for Slack notifications and human review
+    - The `result.json` file is used for programmatic processing
+    - Extract org/repo/branch from the repository URL or task description

@@ -1,0 +1,43 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: worker
+  name: 99-worker-gvisor
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      files:
+        # CRI-O configuration for gVisor runtime (SELinux disabled for gVisor compatibility)
+        - path: /etc/crio/crio.conf.d/99-gvisor.conf
+          mode: 0644
+          overwrite: true
+          contents:
+            source: data:text/plain;charset=utf-8;base64,W2NyaW8ucnVudGltZV0Kc2VsaW51eCA9IGZhbHNlCmRyb3BfaW5mcmFfY3RyID0gZmFsc2UKCltjcmlvLnJ1bnRpbWUucnVudGltZXMucnVuc2NdCnJ1bnRpbWVfcGF0aCA9ICIvdXNyL2xvY2FsL2Jpbi9ydW5zYyIKcnVudGltZV90eXBlID0gIm9jaSIKcnVudGltZV9yb290ID0gIi9ydW4vcnVuc2MiCg==
+        # gVisor installation script
+        - path: /usr/local/bin/install-gvisor.sh
+          mode: 0755
+          overwrite: true
+          contents:
+            source: data:text/plain;charset=utf-8;base64,IyEvYmluL2Jhc2gKc2V0IC1lCgpHVklTT1JfVkVSU0lPTj0ibGF0ZXN0IgpBUkNIPSQodW5hbWUgLW0pCgojIENoZWNrIGlmIHJ1bnNjIGlzIGFscmVhZHkgaW5zdGFsbGVkCmlmIFsgLWYgL3Vzci9sb2NhbC9iaW4vcnVuc2MgXTsgdGhlbgogIGVjaG8gImdWaXNvciBpcyBhbHJlYWR5IGluc3RhbGxlZCIKICBleGl0IDAKZmkKCmVjaG8gIkluc3RhbGxpbmcgZ1Zpc29yIGZvciBhcmNoaXRlY3R1cmU6ICR7QVJDSH0iCgpVUkw9Imh0dHBzOi8vc3RvcmFnZS5nb29nbGVhcGlzLmNvbS9ndmlzb3IvcmVsZWFzZXMvcmVsZWFzZS8ke0dWSVNPUl9WRVJTSU9OfS8ke0FSQ0h9IgoKIyBEb3dubG9hZCBydW5zYyBhbmQgc2hpbQpjdXJsIC1mTG8gL3RtcC9ydW5zYyAiJHtVUkx9L3J1bnNjIgpjdXJsIC1mTG8gL3RtcC9jb250YWluZXJkLXNoaW0tcnVuc2MtdjEgIiR7VVJMfS9jb250YWluZXJkLXNoaW0tcnVuc2MtdjEiCgojIEluc3RhbGwgYmluYXJpZXMKY2htb2QgYStyeCAvdG1wL3J1bnNjIC90bXAvY29udGFpbmVyZC1zaGltLXJ1bnNjLXYxCm12IC90bXAvcnVuc2MgL3Vzci9sb2NhbC9iaW4vcnVuc2MKbXYgL3RtcC9jb250YWluZXJkLXNoaW0tcnVuc2MtdjEgL3Vzci9sb2NhbC9iaW4vY29udGFpbmVyZC1zaGltLXJ1bnNjLXYxCgplY2hvICJnVmlzb3IgaW5zdGFsbGVkIHN1Y2Nlc3NmdWxseSIK
+    systemd:
+      units:
+        - name: gvisor-install.service
+          enabled: true
+          contents: |
+            [Unit]
+            Description=Install gVisor runsc
+            Wants=network-online.target
+            After=network-online.target
+            Before=crio.service
+            ConditionPathExists=!/usr/local/bin/runsc
+
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/bin/install-gvisor.sh
+            RemainAfterExit=yes
+
+            [Install]
+            WantedBy=multi-user.target

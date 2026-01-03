@@ -1,0 +1,44 @@
+# Copyright Contributors to the KubeTask project
+# Sensor that creates KubeTask Tasks in response to GitHub events.
+# This replaces the WebhookTrigger CRD functionality.
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: github
+spec:
+  eventBusName: default
+  template:
+    serviceAccountName: argo-events-sensor
+  dependencies:
+    - name: github-event
+      eventSourceName: github
+      eventName: acm
+  triggers:
+    # Rule 1: PR opened - auto review
+    - template:
+        name: pr-opened
+        conditions: pr-opened-condition
+    # Rule 2: @acm-bot mention from any user
+    - template:
+        name: comment-handler
+        conditions: comment-condition
+  # Conditions for filtering events
+  # Note: Argo Events uses expr-lang expressions, not CEL
+  # See: https://expr.medv.io/docs/Language-Definition
+  conditions:
+    # PR opened condition - exclude PRs opened by acm-bot
+    - name: pr-opened-condition
+      expression: >-
+        Input.headers["X-Github-Event"] == "pull_request" &&
+        Input.body.action == "opened" &&
+        Input.body.sender.login != "acm-bot"
+
+    # Comment from org member (not a Bot, not acm-bot) - PR review comments only
+    - name: comment-condition
+      expression: >-
+        Input.headers["X-Github-Event"] == "pull_request_review_comment" &&
+        Input.body.action == "created" &&
+        contains(Input.body.comment.body, "@acm-bot") &&
+        Input.body.comment.user.type != "Bot" &&
+        Input.body.comment.user.login != "acm-bot" &&
+        Input.body.comment.author_association == "MEMBER"

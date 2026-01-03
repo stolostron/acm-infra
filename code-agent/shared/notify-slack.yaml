@@ -1,0 +1,127 @@
+# ClusterWorkflowTemplate: Slack Notification
+#
+# A reusable cluster-scoped template for sending Slack notifications.
+# Can be referenced by any workflow in any namespace.
+#
+# Prerequisites:
+#   - A Secret named 'slack-config' with key 'webhook-url' in the workflow's namespace
+#
+# Usage in DAG:
+#   - name: notify
+#     templateRef:
+#       name: slack-notify
+#       template: send-message
+#       clusterScope: true
+#     arguments:
+#       parameters:
+#       - name: message
+#         value: "Build completed successfully!"
+#       - name: mentions
+#         value: "<@U123456>"  # Optional: mention user/group
+#
+# Mention formats:
+#   - Single user: "<@U123456>" (Slack user ID)
+#   - Multiple users: "<@U123456> <@U789012>"
+#   - User group: "<!subteam^S123456>" (Slack user group ID)
+#   - Channel: "<!channel>" or "<!here>"
+
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: slack-notify
+  labels:
+    app.kubernetes.io/name: slack-notify
+    app.kubernetes.io/component: notification
+spec:
+  templates:
+  - name: send-message
+    inputs:
+      parameters:
+      - name: message
+        description: "The message to send to Slack"
+      - name: mentions
+        description: "Optional: Slack user IDs or group IDs to mention (e.g., '<@U123456>' for user, '<!subteam^S123456>' for group, or '<@U123>|<@U456>' for multiple)"
+        default: ""
+    container:
+      image: python:3.12-slim
+      command: ["python", "-c"]
+      args:
+        - |
+          import os
+          import json
+          import urllib.request
+          import subprocess
+          import sys
+
+          # Install markdown-to-mrkdwn to a writable directory (for non-root containers)
+          install_dir = "/tmp/pip_packages"
+          subprocess.check_call([
+              sys.executable, "-m", "pip", "install", "-q",
+              "--target", install_dir, "markdown-to-mrkdwn"
+          ])
+          sys.path.insert(0, install_dir)
+          from markdown_to_mrkdwn import SlackMarkdownConverter
+
+          mentions = """{{inputs.parameters.mentions}}"""
+          message = """{{inputs.parameters.message}}"""
+
+          # Convert Markdown to Slack mrkdwn
+          converter = SlackMarkdownConverter()
+          mrkdwn_text = converter.convert(message)
+
+          # Add mentions prefix if provided
+          if mentions.strip():
+              full_text = f"{mentions}\n\n{mrkdwn_text}"
+          else:
+              full_text = mrkdwn_text
+
+          # Build Block Kit payload
+          payload = {
+              "blocks": [
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": full_text
+                      }
+                  }
+              ]
+          }
+
+          # Send to Slack
+          webhook_url = os.environ["SLACK_WEBHOOK_URL"]
+          data = json.dumps(payload).encode("utf-8")
+          req = urllib.request.Request(webhook_url, data=data, headers={"Content-Type": "application/json"})
+
+          print("Sending to Slack...")
+          with urllib.request.urlopen(req) as resp:
+              print(f"Response: {resp.status}")
+
+          print("Notification sent.")
+      env:
+      - name: SLACK_WEBHOOK_URL
+        valueFrom:
+          secretKeyRef:
+            name: slack-config
+            key: webhook-url
+      resources:
+        requests:
+          memory: "64Mi"
+          cpu: "10m"
+        limits:
+          memory: "128Mi"
+          cpu: "100m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        seccompProfile:
+          type: RuntimeDefault
+    retryStrategy:
+      limit: 3
+      retryPolicy: "OnError"
+      backoff:
+        duration: "5s"
+        factor: 2
+        maxDuration: "1m"

@@ -1,0 +1,20 @@
+# VS Code
+.vscode/
+
+# MacOS
+.DS_Store
+
+# Override global gitignore to track CLAUDE.md
+!CLAUDE.md
+
+# Secrets
+*.pem
+*.key
+.env
+.env.*
+*credentials*
+*secret*
+*_id*
+*_secret*
+*_key*
+*_token*

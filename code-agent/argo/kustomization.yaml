@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Argo namespace configuration
+#
+# ClusterWorkflowTemplates are now in shared/ directory.
+# Apply shared resources first: kubectl apply -k code-agent/shared/
+
+namespace: argo
+
+resources:
+  - cluster-rbac.yaml  # ClusterRole for workflow executor
+  - secrets.yaml       # S3 artifact credentials
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: code-agent
+      app.kubernetes.io/component: argo-config
+    includeSelectors: false

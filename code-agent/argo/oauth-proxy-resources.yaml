@@ -1,0 +1,73 @@
+# OAuth Proxy Resources for Argo Server
+#
+# This file contains all resources needed for OAuth Proxy authentication.
+# The setup-oauth-proxy.sh script will:
+#   1. Generate a random cookie secret
+#   2. Apply these resources with the secret substituted
+#
+# Prerequisites:
+#   - OpenShift cluster with OAuth configured
+#   - Argo Server deployed in 'argo' namespace
+#   - kubectl access to the cluster
+
+---
+# Patch ServiceAccount to enable OAuth redirect
+# The annotation tells OpenShift OAuth to allow redirects to this SA
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-server
+  namespace: argo
+  annotations:
+    serviceaccounts.openshift.io/oauth-redirectreference.argo: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"argo-server"}}'
+
+---
+# Update Service to use OAuth Proxy port and request TLS certificate
+# The annotation triggers OpenShift service-ca to generate TLS cert
+apiVersion: v1
+kind: Service
+metadata:
+  name: argo-server
+  namespace: argo
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: argo-server-tls
+spec:
+  ports:
+    - name: oauth-proxy
+      port: 8443
+      targetPort: 8443
+      protocol: TCP
+  selector:
+    app: argo-server
+  type: ClusterIP
+
+---
+# Cookie secret for OAuth Proxy session encryption
+# The placeholder will be replaced by setup script with: openssl rand -base64 32
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argo-server-oauth-cookie
+  namespace: argo
+type: Opaque
+stringData:
+  cookie-secret: "REPLACE_WITH_RANDOM_STRING"
+
+---
+# Update Route to use OAuth Proxy port with reencrypt TLS
+# Note: Host will be auto-assigned by OpenShift if not specified
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: argo-server
+  namespace: argo
+spec:
+  port:
+    targetPort: oauth-proxy
+  tls:
+    termination: reencrypt
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: argo-server
+    weight: 100

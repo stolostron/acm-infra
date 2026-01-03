@@ -1,0 +1,106 @@
+# Workflow: Dual Repo Task with Slack Notification
+#
+# A workflow that runs AI tasks on two repositories in parallel
+# and sends Slack notification upon completion.
+#
+# This workflow references the agent-multi-repo-task ClusterWorkflowTemplate.
+#
+# Target Repositories (hardcoded):
+#   - stolostron/multicloud-operators-foundation (main)
+#   - stolostron/managedcluster-import-controller (main)
+#
+# Prerequisites:
+#   - ClusterWorkflowTemplate 'agent-multi-repo-task' deployed
+#   - ClusterWorkflowTemplate 'code-agent-gemini' deployed
+#   - ClusterWorkflowTemplate 'slack-notify' deployed
+#   - Secret 'slack-config' with 'webhook-url' key
+#   - Secret 'ai-api-keys' with 'GEMINI_API_KEY'
+#   - Secret 'github-credentials' with 'GH_TOKEN' (if creating PRs)
+#   - ServiceAccount 'argo-workflow'
+#
+# Usage:
+#   # Submit with your task description
+#   argo submit hive-api-upgrade-workflow.yaml \
+#     -n server-foundation \
+#     -p task='YOUR_TASK_DESCRIPTION_HERE'
+
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: hive-api-upgrade-task-
+  namespace: server-foundation
+  labels:
+    app: code-agent
+    workflows.argoproj.io/workflow-template: agent-multi-repo-task
+spec:
+  workflowTemplateRef:
+    name: agent-multi-repo-task
+    clusterScope: true
+
+  arguments:
+    parameters:
+    # Task description (user provides this)
+    - name: task
+      value: |
+        # Task
+        Upgrade Hive API to the latest version in the target repo, and create a PR.
+
+        # IMPORTANT: Command Execution Rules
+        You MUST execute ONLY the exact commands specified in the checklist below.
+        DO NOT substitute, modify, or use alternative commands.
+        For example: Use `make test` NOT `go test ./pkg/...`.
+
+        # Upgrade Checklist (Execute in Order)
+
+        ## Step 1: Check for Custom Upgrade Document
+        - Check if `upgrade-hive-api.md` exists in the repo root
+        - If it exists: Follow that document EXACTLY and skip the remaining steps
+        - If it does NOT exist: Proceed with Steps 2-6
+
+        ## Step 2: Verify Go Version Compatibility
+        - Command: `go version`
+        - Compare with the Go version required by `github.com/openshift/hive/apis@master`
+        - If versions are incompatible: STOP and report the incompatibility
+
+        ## Step 3: Update Hive API Dependency
+        - Command: `go get github.com/openshift/hive/apis@master`
+
+        ## Step 4: Update Dependencies
+        - If `vendor/` directory exists: Run `go mod tidy && go mod vendor`
+        - If `vendor/` directory does NOT exist: Run only `go mod tidy`
+
+        ## Step 5: Run Build and Test
+        - Command: `make build`
+        - Command: `make test`
+        - IMPORTANT: Use ONLY `make test`. DO NOT use `go test` directly.
+        - If errors occur: Analyze and attempt to fix the issue
+
+        ## Step 6: Verify E2E Test Build
+        - Command: `go test -c ./test/e2e -o _output/e2e.test`
+        - This only compiles the test binary; do NOT run the actual tests
+        - If build errors occur: Analyze and attempt to fix
+
+        ## Failure Handling
+        - If any step fails and cannot be fixed: Mark the task as FAILED and report the issue
+
+    - name: targets
+      value: |
+        - org: stolostron
+          repos:
+            - multicloud-operators-foundation
+            - managedcluster-import-controller
+          branches:
+            - main
+
+    # Enable Slack notification
+    - name: slack-notify
+      value: "true"
+
+    # Slack mentions (optional): user IDs or group IDs to mention
+    # Examples: "<@U123456>" for user, "<!subteam^S123456>" for group
+    - name: slack-mentions
+      value: "<@U01TX25RJ3B>"
+
+    # Image pull policy: Always pull latest image
+    - name: imagePullPolicy
+      value: "Always"

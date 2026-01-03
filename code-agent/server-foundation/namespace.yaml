@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: server-foundation
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: server-foundation-quota
+  namespace: server-foundation
+spec:
+  hard:
+    pods: "20"
+    requests.cpu: "4"
+    requests.memory: "16Gi"
+    limits.cpu: "8"
+    limits.memory: "32Gi"
+---
+# LimitRange provides default resource limits for containers
+# Required because ResourceQuota enforces limits, and Argo sidecar containers
+# (init, wait) don't specify resources by default
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: server-foundation-limits
+  namespace: server-foundation
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: "200m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "256Mi"

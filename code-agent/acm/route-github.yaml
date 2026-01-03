@@ -1,0 +1,17 @@
+# Copyright Contributors to the KubeTask project
+# Route to expose the GitHub EventSource webhook endpoint externally.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: github-webhook
+spec:
+  port:
+    targetPort: 12000
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: github-eventsvc
+    weight: 100
+  wildcardPolicy: None

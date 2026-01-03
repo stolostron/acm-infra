@@ -1,0 +1,89 @@
+# OAuth Proxy Patch for Argo Server
+#
+# This patch adds OpenShift OAuth Proxy as a sidecar to argo-server,
+# providing authentication via OpenShift OAuth.
+#
+# After applying:
+#   - All users must login with OpenShift credentials
+#   - Unauthenticated requests are rejected
+#
+# To apply: kubectl patch deployment argo-server -n argo --patch-file oauth-proxy-patch.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argo-server
+  namespace: argo
+spec:
+  template:
+    spec:
+      serviceAccountName: argo-server
+      containers:
+        # Keep existing argo-server container (will be merged)
+        - name: argo-server
+          args:
+            - server
+            - --auth-mode=server
+            - --secure=false  # OAuth proxy handles TLS
+          # Change to listen on localhost only
+          env:
+            - name: ARGO_SERVER_LISTEN
+              value: "localhost:2746"
+          # Update readiness probe to use HTTP (since --secure=false)
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 2746
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 20
+        # Add OAuth Proxy sidecar
+        - name: oauth-proxy
+          image: quay.io/openshift/origin-oauth-proxy:4.14
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8443
+              name: oauth-proxy
+              protocol: TCP
+          args:
+            - --https-address=:8443
+            - --provider=openshift
+            - --openshift-service-account=argo-server
+            - --upstream=http://localhost:2746
+            - --tls-cert=/etc/tls/private/tls.crt
+            - --tls-key=/etc/tls/private/tls.key
+            - --cookie-secret-file=/etc/oauth-proxy/cookie-secret
+            - --cookie-expire=24h
+            - --email-domain=*
+            - --pass-basic-auth=false
+            - --pass-access-token=true
+            - --set-xauthrequest=true
+          volumeMounts:
+            - name: tls-certificates
+              mountPath: /etc/tls/private
+              readOnly: true
+            - name: oauth-cookie-secret
+              mountPath: /etc/oauth-proxy
+              readOnly: true
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            runAsNonRoot: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: tls-certificates
+          secret:
+            secretName: argo-server-tls
+        - name: oauth-cookie-secret
+          secret:
+            secretName: argo-server-oauth-cookie

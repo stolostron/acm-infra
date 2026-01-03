@@ -1,0 +1,38 @@
+# RBAC configuration for Argo Workflows and Events in acm namespace
+#
+# ServiceAccounts and RoleBindings that reference the ClusterRoles
+# defined in code-agent/argo/cluster-rbac.yaml
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflow
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-events-sensor
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: argo-workflow-executor
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-events-sensor-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: argo-events-sensor
+subjects:
+  - kind: ServiceAccount
+    name: argo-events-sensor

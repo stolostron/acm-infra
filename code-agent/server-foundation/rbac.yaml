@@ -1,0 +1,36 @@
+# RBAC configuration for Argo Workflows in server-foundation namespace
+#
+# ServiceAccount and RoleBindings that reference ClusterRoles:
+#   - argo-workflow-executor: Basic workflow execution (from argo/)
+#   - code-agent-workflow: ConfigMap access for context aggregation (from shared/)
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflow
+---
+# RoleBinding for basic workflow execution
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-executor-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: argo-workflow-executor
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow
+---
+# RoleBinding for code-agent specific permissions (ConfigMap access)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-code-agent-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: code-agent-workflow
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow

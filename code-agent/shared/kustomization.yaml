@@ -1,0 +1,33 @@
+# Kustomization for shared cluster-scoped resources
+#
+# This directory contains ClusterWorkflowTemplates and ClusterRoles
+# that can be used by any team/namespace.
+#
+# Apply once per cluster:
+#   kubectl apply -k code-agent/shared/
+#
+# Each team namespace needs:
+#   1. RoleBinding to 'code-agent-workflow' ClusterRole
+#   2. Secret 'ai-api-keys' with API keys
+#   3. Secret 'slack-config' with webhook-url (if using Slack notifications)
+#   4. Optional: Context ConfigMaps
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - cluster-rbac.yaml
+  - agent-gemini.yaml
+  - agent-opencode.yaml
+  - agent-multi-repo-task.yaml
+  - notify-slack.yaml
+  # Note: Namespace-scoped resources (secrets, context, network-policy) are in:
+  #   ./namespace-resources/
+  # Each team's kustomization.yaml should reference:
+  #   - ../shared/namespace-resources
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: code-agent
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false

@@ -1,0 +1,13 @@
+# Namespace-scoped shared resources
+#
+# This directory contains resources that need to be applied per-namespace.
+# Reference from team kustomization.yaml:
+#   resources:
+#     - ../shared/namespace-resources
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - secrets.yaml
+  - agent-multi-repo-task-context.yaml

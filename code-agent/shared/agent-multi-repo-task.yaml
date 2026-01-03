@@ -1,0 +1,312 @@
+# ClusterWorkflowTemplate: Multi-Repo Task Processor
+#
+# A cluster-scoped workflow template that executes the same AI task
+# across multiple repositories and branches in parallel.
+#
+# This template reuses the following ClusterWorkflowTemplates:
+#   - code-agent-gemini: For AI task execution
+#   - slack-notify: For optional Slack notifications
+#
+# Prerequisites:
+#   - ServiceAccount 'argo-workflow' with ConfigMap read permissions
+#   - Secret 'ai-api-keys' with 'GEMINI_API_KEY'
+#   - Secret 'github-credentials' with 'GH_TOKEN' (if creating PRs)
+#   - Secret 'slack-config' with 'webhook-url' (if slack-notify enabled)
+#   - Optional: Context ConfigMaps for task guidance
+#
+# Usage:
+#   # Single repo
+#   argo submit --from clusterworkflowtemplate/agent-multi-repo-task -n server-foundation \
+#     -p targets='
+#     - org: stolostron
+#       repos: [managedcluster-import-controller]
+#       branches: [main]
+#     ' \
+#     -p task='Run go mod tidy and create a PR'
+#
+#   # Multiple repos and branches (Cartesian product: 2 repos x 2 branches = 4 tasks)
+#   argo submit --from clusterworkflowtemplate/agent-multi-repo-task -n server-foundation \
+#     -p targets='
+#     - org: stolostron
+#       repos: [managedcluster-import-controller, multicloud-operators-foundation]
+#       branches: [main, backplane-2.10]
+#     ' \
+#     -p task='Upgrade Hive API to latest version' \
+#     -p context-configmaps='context-pr-guide,context-hive-upgrade'
+#
+#   # Multiple organizations
+#   argo submit --from clusterworkflowtemplate/agent-multi-repo-task -n server-foundation \
+#     -p targets='
+#     - org: stolostron
+#       repos: [cluster-proxy]
+#       branches: [main]
+#     - org: open-cluster-management
+#       repos: [api]
+#       branches: [main]
+#     '
+#
+#   # With Slack notification enabled
+#   argo submit --from clusterworkflowtemplate/agent-multi-repo-task -n server-foundation \
+#     -p targets='...' \
+#     -p task='Run go mod tidy' \
+#     -p slack-notify='true'
+#
+#   # With Slack notification and mentions
+#   argo submit --from clusterworkflowtemplate/agent-multi-repo-task -n server-foundation \
+#     -p targets='...' \
+#     -p task='Run go mod tidy' \
+#     -p slack-notify='true' \
+#     -p slack-mentions='<@U123456>'
+
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: agent-multi-repo-task
+  labels:
+    app: code-agent
+    agent-provider: gemini
+spec:
+  entrypoint: main
+  serviceAccountName: argo-workflow
+
+  # Pod garbage collection: delete completed pods after 30 minutes
+  podGC:
+    strategy: OnPodCompletion
+    deleteDelayDuration: 30m
+
+  # Workflow timeout: 8 hours (28800 seconds)
+  activeDeadlineSeconds: 28800
+
+  # TTL strategy for automatic workflow cleanup
+  ttlStrategy:
+    secondsAfterSuccess: 259200   # 3 days
+    secondsAfterFailure: 604800   # 1 week
+
+  # Workflow-level arguments
+  arguments:
+    parameters:
+    # Target repositories in YAML format
+    # Format:
+    #   - org: stolostron
+    #     repos: [repo1, repo2]
+    #     branches: [main, release-2.10]
+    # Will expand using Cartesian product: repos x branches
+    - name: targets
+      value: ""
+
+    # Task description for the AI agent
+    - name: task
+      value: "Say hi and introduce yourself briefly"
+
+    # Default context ConfigMaps (always included, merged with user-provided context-configmaps)
+    - name: default-context-configmaps
+      value: "agent-multi-repo-task-contexts"
+
+    # Context aggregation: comma-separated ConfigMap list (additional to defaults)
+    - name: context-configmaps
+      value: ""
+
+    # Container image parameters
+    - name: image
+      value: "quay.io/zhaoxue/code-agent:latest"
+    - name: imagePullPolicy
+      value: "IfNotPresent"
+
+    # Runtime class for container isolation (e.g., "gvisor")
+    - name: agent-runtimeclass
+      value: ""
+
+    # Per-task timeout in seconds (default: 4 hours)
+    - name: task-timeout
+      value: "14400"
+
+    # Slack notification: set to "true" to enable notification after completion
+    - name: slack-notify
+      value: "false"
+
+    # Slack mentions: user IDs or group IDs to mention
+    # Examples: "<@U123456>" for user, "<!subteam^S123456>" for group
+    - name: slack-mentions
+      value: ""
+
+  templates:
+  # ============================================================
+  # Main Template (Steps)
+  # ============================================================
+  - name: main
+    steps:
+    # Step 1: Expand targets into individual tasks
+    - - name: expand
+        template: expand-targets
+        arguments:
+          parameters:
+          - name: targets
+            value: "{{workflow.parameters.targets}}"
+
+    # Step 2: Execute tasks in parallel using withParam
+    - - name: execute
+        templateRef:
+          name: code-agent-gemini
+          template: gemini-task
+          clusterScope: true
+        arguments:
+          parameters:
+          - name: task
+            value: |
+              The target repository: {{item.org}}/{{item.repo}} (branch: {{item.branch}})
+
+              {{workflow.parameters.task}}
+          - name: repo
+            value: "{{item.url}}"
+          - name: branch
+            value: "{{item.branch}}"
+          # Combine default and user-provided context-configmaps (merged in shell, not Argo expression)
+          - name: context-configmaps
+            value: "{{workflow.parameters.default-context-configmaps}},{{workflow.parameters.context-configmaps}}"
+          - name: image
+            value: "{{workflow.parameters.image}}"
+          - name: imagePullPolicy
+            value: "{{workflow.parameters.imagePullPolicy}}"
+          - name: agent-runtimeclass
+            value: "{{workflow.parameters.agent-runtimeclass}}"
+        withParam: "{{steps.expand.outputs.result}}"
+
+    # Step 3: Aggregate results using AI agent
+    - - name: aggregate
+        templateRef:
+          name: code-agent-gemini
+          template: gemini-task
+          clusterScope: true
+        arguments:
+          parameters:
+          - name: task
+            value: |
+              You are a report generator. Analyze the following task results and create a human-readable summary.
+
+              ## Original Task
+              {{workflow.parameters.task}}
+
+              ## Target Repositories
+              {{steps.expand.outputs.result}}
+
+              ## Results from Each Repository
+              {{steps.execute.outputs.parameters.result}}
+
+              ## Your Task
+              1. Analyze all the results above
+              2. Create a clear, well-formatted summary in Markdown
+              3. Save the summary to `/workspace/summary.md`
+              4. The summary should include:
+                 - Overall status (how many succeeded/failed)
+                 - Key findings or actions taken for each repository
+                 - Any errors or issues encountered
+                 - Recommendations if applicable
+
+              After creating the summary, also create `/workspace/result.json` with:
+              ```json
+              {
+                "status": "success",
+                "summary_file": "/workspace/summary.md",
+                "total_tasks": <number>,
+                "success_count": <number>,
+                "failed_count": <number>
+              }
+              ```
+          - name: repo
+            value: ""
+          - name: branch
+            value: "main"
+          - name: context-configmaps
+            value: ""
+          - name: image
+            value: "{{workflow.parameters.image}}"
+          - name: imagePullPolicy
+            value: "{{workflow.parameters.imagePullPolicy}}"
+          - name: agent-runtimeclass
+            value: "{{workflow.parameters.agent-runtimeclass}}"
+
+    # Step 4: Send Slack notification (optional, controlled by slack-notify parameter)
+    # The message content comes from the aggregate step's summary output
+    - - name: notify
+        when: "{{workflow.parameters.slack-notify}} == true"
+        templateRef:
+          name: slack-notify
+          template: send-message
+          clusterScope: true
+        arguments:
+          parameters:
+          - name: message
+            value: "{{steps.aggregate.outputs.parameters.summary}}"
+          - name: mentions
+            value: "{{workflow.parameters.slack-mentions}}"
+
+  # ============================================================
+  # Expand Targets Template
+  # Converts YAML targets to JSON array using Cartesian product
+  # ============================================================
+  - name: expand-targets
+    inputs:
+      parameters:
+      - name: targets
+    script:
+      image: ghcr.io/mikefarah/yq:latest
+      command: [sh]
+      source: |
+        #!/bin/sh
+        # Expand YAML targets to JSON array using Cartesian product
+
+        TARGETS='{{inputs.parameters.targets}}'
+
+        if [ -z "$TARGETS" ] || [ "$TARGETS" = "" ]; then
+          echo "No targets specified" >&2
+          echo "[]"
+          exit 0
+        fi
+
+        # Write targets to temp file
+        echo "$TARGETS" > /tmp/targets.yaml
+
+        # Use yq to expand targets: for each org, create cartesian product of repos x branches
+        yq -o=json '
+          . as $root |
+          [
+            .[] |
+            .org as $org |
+            (.repos // []) | .[] | . as $repo |
+            ($root[0].branches // ["main"]) | .[] | . as $branch |
+            {
+              "org": $org,
+              "repo": $repo,
+              "branch": $branch,
+              "url": ("https://github.com/" + $org + "/" + $repo)
+            }
+          ]
+        ' /tmp/targets.yaml 2>/dev/null || {
+          # Fallback: simpler parsing for single target
+          ORG=$(yq '.[0].org' /tmp/targets.yaml)
+          echo "Parsing targets for org: $ORG" >&2
+          yq -o=json '
+            [
+              .[0] |
+              .org as $org |
+              .branches as $branches |
+              .repos[] |
+              . as $repo |
+              $branches[] |
+              . as $branch |
+              {
+                "org": $org,
+                "repo": $repo,
+                "branch": $branch,
+                "url": ("https://github.com/" + $org + "/" + $repo)
+              }
+            ]
+          ' /tmp/targets.yaml
+        }
+      resources:
+        requests:
+          memory: "64Mi"
+          cpu: "50m"
+        limits:
+          memory: "128Mi"
+          cpu: "100m"

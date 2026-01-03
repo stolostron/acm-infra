@@ -1,0 +1,35 @@
+# Simple test workflow for agent-multi-repo-task
+# Uses a quick task (summarize README) to speed up testing
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: test-simple-task-
+  namespace: server-foundation
+spec:
+  workflowTemplateRef:
+    name: agent-multi-repo-task
+    clusterScope: true
+
+  arguments:
+    parameters:
+    - name: task
+      value: |
+        # Task
+        Summarize the README.md file in 2-3 sentences.
+
+    - name: targets
+      value: |
+        - org: stolostron
+          repos:
+            - multicloud-operators-foundation
+          branches:
+            - main
+
+    - name: slack-notify
+      value: "true"
+
+    - name: slack-mentions
+      value: "<@U01TX25RJ3B>"
+
+    - name: imagePullPolicy
+      value: "Always"

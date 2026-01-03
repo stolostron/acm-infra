@@ -1,0 +1,33 @@
+# ClusterRole for Code Agent Workflows
+#
+# Provides permissions needed by the argo-workflow ServiceAccount
+# to execute code-agent workflows.
+#
+# Each namespace needs a RoleBinding to grant these permissions:
+#   apiVersion: rbac.authorization.k8s.io/v1
+#   kind: RoleBinding
+#   metadata:
+#     name: argo-workflow-code-agent
+#   subjects:
+#   - kind: ServiceAccount
+#     name: argo-workflow
+#   roleRef:
+#     kind: ClusterRole
+#     name: code-agent-workflow
+#     apiGroup: rbac.authorization.k8s.io
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: code-agent-workflow
+  labels:
+    app: code-agent
+rules:
+# Read ConfigMaps for context aggregation
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list"]
+# Read Secrets (for API keys - already mounted, but useful for validation)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]

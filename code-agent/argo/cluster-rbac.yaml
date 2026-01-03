@@ -1,0 +1,51 @@
+# Cluster-scoped RBAC for Argo Workflows
+#
+# This ClusterRole defines permissions required by Argo Workflow executor.
+# Each squad namespace should create:
+#   1. A ServiceAccount named 'argo-workflow'
+#   2. A RoleBinding that references this ClusterRole
+#
+# Example RoleBinding for a new namespace:
+#   apiVersion: rbac.authorization.k8s.io/v1
+#   kind: RoleBinding
+#   metadata:
+#     name: argo-workflow-binding
+#   roleRef:
+#     apiGroup: rbac.authorization.k8s.io
+#     kind: ClusterRole
+#     name: argo-workflow-executor
+#   subjects:
+#     - kind: ServiceAccount
+#       name: argo-workflow
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argo-workflow-executor
+rules:
+  # Required for Argo to record task results
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+  # Required for Argo executor to check pod status
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "watch"]
+---
+# ClusterRole for Argo Events Sensor to trigger workflows
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argo-events-sensor
+rules:
+  # Required for sensor to create/manage workflows
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows", "workflowtemplates"]
+    verbs: ["create", "get", "list", "watch"]
+  # Required for sensor to read secrets for event parameters
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
