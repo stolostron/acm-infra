@@ -2,6 +2,10 @@
 
 exec 3>&1
 
+# Source the GitHub authentication library
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/github-auth.sh"
+
 # Debug output function
 debug_echo() {
     if [ "$debug" = true ]; then
@@ -257,9 +261,8 @@ has_null_exception() {
 
 echo "Checking for Github auth token"
 authorization=""
-if [ -f "authorization.txt" ]; then
-    authorization="Authorization: Bearer $(cat "authorization.txt")"
-    echo "Authorization found. Applying to github API requests"
+if authorization=$(get_github_authorization 2>/dev/null); then
+    echo "Authorization found (method: $(get_github_auth_method)). Applying to github API requests"
 
     # Check current GitHub API rate limit status
     echo ""
@@ -295,6 +298,9 @@ if [ -f "authorization.txt" ]; then
         echo "⚠️  Could not fetch rate limit status"
     fi
     echo ""
+else
+    echo "Warning: No GitHub authentication configured. API calls may be rate-limited."
+    authorization=""
 fi
 
 # GitHub API call with simple rate limiting and retry logic
@@ -305,6 +311,14 @@ github_api_call() {
     local attempt=1
 
     while [ $attempt -le $max_retries ]; do
+        # Refresh GitHub App token if needed (for long-running operations)
+        if refresh_github_auth_if_needed; then
+            # Update authorization header if token was refreshed
+            if [[ "$(get_github_auth_method)" == "github-app" ]]; then
+                authorization=$(get_github_authorization 2>/dev/null) || true
+            fi
+        fi
+
         # Make the API call
         response=$(curl -LsH "$authorization" -w "\n%{http_code}" "$url" 2>&1)
         http_code=$(echo "$response" | tail -n 1)
@@ -826,8 +840,9 @@ else
     components=$(echo "$component_yaml" | yq '.items[] | select(.spec.application == "release-'"$application"'") | .metadata.name')
 fi
 
-# Component processing delay (in seconds) to avoid GitHub API rate limits
-COMPONENT_DELAY=2
+# Component processing delay (in seconds)
+# Note: With GitHub App authentication (5000 requests/hour), no delay is needed
+COMPONENT_DELAY=0
 
 component_count=0
 total_components=$(echo "$components" | wc -l | tr -d ' ')

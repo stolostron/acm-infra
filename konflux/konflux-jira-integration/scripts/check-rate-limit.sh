@@ -2,14 +2,21 @@
 
 # Quick script to check GitHub API rate limit
 
-if [ -f "data/authorization.txt" ]; then
-    TOKEN=$(cat "data/authorization.txt")
-elif [ -f "authorization.txt" ]; then
-    TOKEN=$(cat "authorization.txt")
-elif [ -n "$GITHUB_TOKEN" ]; then
-    TOKEN="$GITHUB_TOKEN"
+# Source the GitHub authentication library
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/github-auth.sh"
+
+# Get authorization using the shared library
+if authorization=$(get_github_authorization 2>/dev/null); then
+    # Extract token from "Authorization: Bearer <token>"
+    TOKEN="${authorization#Authorization: Bearer }"
+    echo "Using authentication method: $(get_github_auth_method)"
 else
-    echo "❌ No GitHub token found. Please set GITHUB_TOKEN or create authorization.txt"
+    echo "❌ No GitHub token found."
+    echo "   Set one of the following:"
+    echo "   - GH_APP_ID, GH_APP_INSTALLATION_ID, GH_APP_PRIVATE_KEY (for GitHub App)"
+    echo "   - GITHUB_TOKEN (for Personal Access Token)"
+    echo "   - authorization.txt file"
     exit 1
 fi
 
