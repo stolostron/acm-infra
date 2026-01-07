@@ -375,15 +375,35 @@ jobs:
             exit 1
           fi
 
-      - name: Setup GitHub token
+      - name: Setup GitHub authentication
         if: steps.should_run.outputs.skip != 'true'
         run: |
           echo "Setting up GitHub authentication..."
           mkdir -p ${{ github.workspace }}/data
-          # Put authorization.txt in scripts directory where compliance.sh expects it
-          echo "${{ secrets.GH_PAT }}" > ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/authorization.txt
-          chmod 600 ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/authorization.txt
-          echo "✓ GitHub token configured"
+
+          # Primary: GitHub App credentials (if available)
+          # Note: We use GH_APP_* prefix instead of GITHUB_* because GitHub Actions
+          #       reserves the GITHUB_* namespace and doesn't allow user secrets with that prefix.
+          if [[ -n "${{ secrets.GH_APP_ID }}" && -n "${{ secrets.GH_APP_INSTALLATION_ID }}" && -n "${{ secrets.GH_APP_PRIVATE_KEY }}" ]]; then
+            echo "Using GitHub App authentication"
+            echo "GH_APP_ID=${{ secrets.GH_APP_ID }}" >> $GITHUB_ENV
+            echo "GH_APP_INSTALLATION_ID=${{ secrets.GH_APP_INSTALLATION_ID }}" >> $GITHUB_ENV
+            # Use heredoc for multiline private key
+            {
+              echo 'GH_APP_PRIVATE_KEY<<EOF_PRIVATE_KEY'
+              echo '${{ secrets.GH_APP_PRIVATE_KEY }}'
+              echo 'EOF_PRIVATE_KEY'
+            } >> $GITHUB_ENV
+            echo "✓ GitHub App credentials configured"
+          fi
+
+          # Fallback: Personal Access Token (kept for backward compatibility)
+          if [[ -n "${{ secrets.GH_PAT }}" ]]; then
+            echo "GITHUB_TOKEN=${{ secrets.GH_PAT }}" >> $GITHUB_ENV
+            echo "✓ GitHub PAT configured as fallback"
+          fi
+
+          echo "✓ GitHub authentication configured"
 
       - name: Run compliance retrigger
         if: steps.should_run.outputs.skip != 'true'
