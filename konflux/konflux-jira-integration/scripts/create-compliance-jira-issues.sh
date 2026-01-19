@@ -1256,17 +1256,39 @@ Or run 'jira init' manually to configure interactively."
         echo "  Board: $JIRA_BOARD" >&2
         echo "" >&2
 
-        if jira init \
-            --installation "$JIRA_INSTALLATION" \
-            --server "$JIRA_SERVER" \
-            --login "$JIRA_LOGIN" \
-            --auth-type "$JIRA_AUTH_TYPE" \
-            --project "$JIRA_PROJECT" \
-            --board "$JIRA_BOARD" \
-            --force; then
+        # Retry logic for jira init (max 3 attempts)
+        local max_retries=3
+        local retry_delay=5
+        local attempt=1
+        local init_success=false
+
+        while [[ $attempt -le $max_retries ]]; do
+            info "Attempting jira init (attempt $attempt/$max_retries)..."
+
+            if jira init \
+                --installation "$JIRA_INSTALLATION" \
+                --server "$JIRA_SERVER" \
+                --login "$JIRA_LOGIN" \
+                --auth-type "$JIRA_AUTH_TYPE" \
+                --project "$JIRA_PROJECT" \
+                --board "$JIRA_BOARD" \
+                --force; then
+                init_success=true
+                break
+            else
+                if [[ $attempt -lt $max_retries ]]; then
+                    warn "jira init failed (attempt $attempt/$max_retries), retrying in ${retry_delay}s..."
+                    sleep $retry_delay
+                    retry_delay=$((retry_delay * 2))
+                fi
+                attempt=$((attempt + 1))
+            fi
+        done
+
+        if [[ "$init_success" == true ]]; then
             success "JIRA CLI initialized successfully"
         else
-            die "Failed to initialize JIRA CLI
+            die "Failed to initialize JIRA CLI after $max_retries attempts
 
 You can try running 'jira init' manually for interactive setup."
         fi
