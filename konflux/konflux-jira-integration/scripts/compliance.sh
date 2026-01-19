@@ -897,8 +897,12 @@ for line in $components; do
     # Check if component is a bundle operator
     bundle_result=$(check_bundle_operator "$line")
 
-    # Check if image is stale (>2 weeks old) - log only
-    check_image_stale "$build_time" "$repo"
+    # Check if image is stale (>2 weeks old)
+    if ! check_image_stale "$build_time" "$repo"; then
+        image_stale="true"
+    else
+        image_stale="false"
+    fi
 
     # Check hermetic builds (skip for bundle operators)
     if [[ "$bundle_result" == "BUNDLE_OPERATOR" ]]; then
@@ -958,8 +962,8 @@ for line in $components; do
         # Skip retriggering for components with null/blank status (nothing to retrigger)
         elif echo "$data" | grep -qE "(^|,)(EC_BLANK|Push Failure)(,|$)" && [[ "$push_status" == "Failed" || "$push_status" == "null" || -z "$push_status" ]]; then
             debug_echo "[debug] Skipping retrigger for $line - null status, nothing to retrigger"
-        # Check if component has any failures (Push Failure or actual Failed status, but not Successful)
-        elif echo "$data" | grep -qE "(^|,)(Failed|Push Failure|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE|Not Enabled|Not Compliant)(,|$)"; then
+        # Check if component has any failures (Push Failure or actual Failed status, but not Successful) or stale image
+        elif echo "$data" | grep -qE "(^|,)(Failed|Push Failure|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE|Not Enabled|Not Compliant)(,|$)" || [[ "$image_stale" == "true" ]]; then
             echo "🔄 Retriggering component: $line" >&3
             if kubectl annotate components/$line build.appstudio.openshift.io/request=trigger-pac-build --overwrite; then
                 echo "✅ Successfully triggered rebuild for $line" >&3
