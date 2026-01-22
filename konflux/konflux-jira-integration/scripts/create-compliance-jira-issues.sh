@@ -31,6 +31,8 @@ readonly STATUS_INSPECTION_FAILURE="INSPECTION_FAILURE"
 readonly STATUS_DIGEST_FAILURE="DIGEST_FAILURE"
 readonly STATUS_SKIPPED_NULL="Skipped_Null"
 readonly STATUS_SKIPPED_NULL_EC="Skipped (Null)"
+readonly STATUS_SKIPPED_CEL="Skipped_CEL"
+readonly STATUS_SKIPPED_CEL_EC="Skipped (CEL)"
 
 # JIRA field constants
 readonly JIRA_ACTIVITY_TYPE="Quality / Stability / Reliability"

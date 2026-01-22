@@ -645,22 +645,28 @@ check_hermetic_builds() {
     fi
 }
 
-# Function to fetch all check runs for a component (called once per component)
-fetch_check_runs() {
-    local org="$1"
-    local repo="$2"
-    local branch="$3"
+# Helper function to extract suite ID from suites response with error handling
+extract_suite_id() {
+    local suites_response="$1"
 
-    # Try check-suites first (more reliable for Konflux)
-    check_suites_response=$(github_api_call "https://api.github.com/repos/$org/$repo/commits/$branch/check-suites")
-    suite_id=$(echo "$check_suites_response" | yq -p=json ".check_suites[] | select(.app.name == \"Red Hat Konflux\") | .id" 2>&1 | head -1)
+    suite_id=$(echo "$suites_response" | yq -p=json ".check_suites[] | select(.app.name == \"Red Hat Konflux\") | .id" 2>&1 | head -1)
     if echo "$suite_id" | grep -q "Error:"; then
         echo "⚠️  Error parsing check-suites response:" >&3
         echo "$suite_id" >&3
         echo "Check-suites JSON response (first 500 lines):" >&3
-        echo "$check_suites_response" | head -500 >&3
+        echo "$suites_response" | head -500 >&3
         suite_id=""
     fi
+
+    echo "$suite_id"
+}
+
+# Function to fetch all check runs for a component
+fetch_check_runs() {
+    local org="$1"
+    local repo="$2"
+    local branch="$3"
+    local suite_id="$4"
 
     if [[ -n "$suite_id" ]]; then
         # Use suite method for Konflux - fetch ALL check runs at once
@@ -681,6 +687,9 @@ check_enterprise_contract() {
     local line="$2"
     local repo="$3"
     local all_check_runs="$4"
+    local org="$5"
+    local branch="$6"
+    local suite_status="$7"
 
     ecname="enterprise-contract-$application / $line"
 
@@ -714,18 +723,27 @@ check_enterprise_contract() {
         echo "🟩 $repo $ecname: SUCCESS" >&3
         echo "Compliant|$ec_url"
     else
-        echo "🟥 $repo $ecname: FAILURE (ec was: \"$ec\")" >&3
         if [[ -z "$ec" ]] || [[ "$ec" == "null" ]]; then
+            # Check if no check runs exist (CEL filter or infrastructure issue)
+            runs_count=$(echo "$all_check_runs" | yq -p=json '.total_count' 2>/dev/null)
+
+            if [[ "$runs_count" == "0" && "$suite_status" == "queued" ]]; then
+                # CEL filter skip - stuck in queued, never runs
+                echo "🟡 $repo $ecname: SKIPPED (CEL filter - no runs triggered)" >&3
+                echo "EC_SKIPPED_CEL|https://github.com/$org/$repo/commits/$branch"
             # Check for null exception
-            if has_null_exception "$line" "ec"; then
+            elif has_null_exception "$line" "ec"; then
                 echo "🟡 $repo $ecname: SKIPPED (null status excepted)" >&3
                 echo "EC_SKIPPED_NULL|$ec_url"
             else
+                echo "🟥 $repo $ecname: FAILURE (ec was: \"$ec\")" >&3
                 echo "EC_BLANK|$ec_url"
             fi
         elif [[ "$ec" == "cancelled" ]]; then
+            echo "🟥 $repo $ecname: FAILURE (ec was: \"$ec\")" >&3
             echo "EC_CANCELED|$ec_url"
         else
+            echo "🟥 $repo $ecname: FAILURE (ec was: \"$ec\")" >&3
             echo "Not Compliant|$ec_url"
         fi
     fi
@@ -736,6 +754,9 @@ check_component_on_push() {
     local line="$1"
     local repo="$2"
     local all_check_runs="$3"
+    local org="$4"
+    local branch="$5"
+    local suite_status="$6"
 
     pushname="Red Hat Konflux / $line-on-push"
 
@@ -767,10 +788,22 @@ check_component_on_push() {
         echo "🟩 $repo $pushname: SUCCESS" >&3
         echo "Successful|$push_url"
     else
-        # Check if null status should be skipped
-        if [[ -z "$push_status" || "$push_status" == "null" ]] && has_null_exception "$line" "push"; then
-            echo "🟡 $repo $pushname: SKIPPED (null status excepted)" >&3
-            echo "Skipped_Null|$push_url"
+        if [[ -z "$push_status" || "$push_status" == "null" ]]; then
+            # Check if no check runs exist (CEL filter or infrastructure issue)
+            runs_count=$(echo "$all_check_runs" | yq -p=json '.total_count' 2>/dev/null)
+
+            if [[ "$runs_count" == "0" && "$suite_status" == "queued" ]]; then
+                # CEL filter skip - stuck in queued, never runs
+                echo "🟡 $repo $pushname: SKIPPED (CEL filter - no runs triggered)" >&3
+                echo "Skipped_CEL|https://github.com/$org/$repo/commits/$branch"
+            # Check if null status should be skipped
+            elif has_null_exception "$line" "push"; then
+                echo "🟡 $repo $pushname: SKIPPED (null status excepted)" >&3
+                echo "Skipped_Null|$push_url"
+            else
+                echo "🟥 $repo $pushname: FAILURE (status was: \"$push_status\")" >&3
+                echo "Failed|$push_url"
+            fi
         else
             echo "🟥 $repo $pushname: FAILURE (status was: \"$push_status\")" >&3
             echo "Failed|$push_url"
@@ -911,17 +944,22 @@ for line in $components; do
         data="$data,$(check_hermetic_builds "$yaml" "$pull_yaml" "$authorization" "$org" "$repo")"
     fi
 
-    # Fetch all check runs once for this component (reduces API calls from 4 to 2)
-    all_check_runs=$(fetch_check_runs "$org" "$repo" "$branch")
+    # Fetch check suites response once for this component
+    suites_response=$(github_api_call "https://api.github.com/repos/$org/$repo/commits/$branch/check-suites")
+    suite_id=$(extract_suite_id "$suites_response")
+    suite_status=$(echo "$suites_response" | yq -p=json ".check_suites[] | select(.app.name == \"Red Hat Konflux\") | .status" 2>/dev/null)
+
+    # Fetch all check runs for this component
+    all_check_runs=$(fetch_check_runs "$org" "$repo" "$branch" "$suite_id")
 
     # Check enterprise contract using pre-fetched data
-    ec_result=$(check_enterprise_contract "$application" "$line" "$repo" "$all_check_runs")
+    ec_result=$(check_enterprise_contract "$application" "$line" "$repo" "$all_check_runs" "$org" "$branch" "$suite_status")
     # Extract EC status and URL (format: "Status|URL")
     ec_status="${ec_result%%|*}"
     ec_url="${ec_result##*|}"
 
     # Check on-push using pre-fetched data
-    push_result=$(check_component_on_push "$line" "$repo" "$all_check_runs")
+    push_result=$(check_component_on_push "$line" "$repo" "$all_check_runs" "$org" "$branch" "$suite_status")
     # Extract push status and URL (format: "Status|URL")
     push_status="${push_result%%|*}"
     push_url="${push_result##*|}"
@@ -936,6 +974,9 @@ for line in $components; do
     elif [[ "$ec_status" == "EC_SKIPPED_NULL" ]]; then
         # Component has null exception - treat as skipped
         ec_status="Skipped (Null)"
+    elif [[ "$ec_status" == "EC_SKIPPED_CEL" ]]; then
+        # Component skipped by CEL filter - treat as skipped
+        ec_status="Skipped (CEL)"
     fi
 
     data="$data,$ec_status"
