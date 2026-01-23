@@ -180,11 +180,21 @@ jobs:
           yq --version
           skopeo --version
 
+      - name: Generate GitHub App Token
+        id: app-token
+        if: steps.should_run.outputs.skip != 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: "acm-infra,acm-config"
+
       - name: Checkout repository
         if: steps.should_run.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
           submodules: 'recursive'
 
       - name: Setup scripts
@@ -325,43 +335,47 @@ jobs:
       - name: Validate GitHub token
         if: steps.should_run.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          echo "Validating GitHub token..."
+          echo "Validating GitHub App token..."
 
-          # Test token validity with GitHub API
+          # Test token validity by accessing the repository
+          # Note: GitHub App tokens cannot access /user endpoint, so we check repo access instead
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/user)
+            "https://api.github.com/repos/${{ github.repository }}")
 
           if [[ "$HTTP_STATUS" == "200" ]]; then
-            echo "✓ GitHub token is valid"
-
-            # Get token info for debugging
-            USER_INFO=$(curl -s \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/user | jq -r '.login // "unknown"')
-            echo "  Authenticated as: $USER_INFO"
+            echo "✓ GitHub App token is valid"
+            echo "  Repository access verified: ${{ github.repository }}"
 
           elif [[ "$HTTP_STATUS" == "401" ]]; then
             echo ""
-            echo "❌ GitHub token is invalid or expired"
+            echo "❌ GitHub App token is invalid or expired"
             echo "HTTP Status: $HTTP_STATUS (Unauthorized)"
             echo ""
-            echo "Please update the GH_PAT secret with a valid token"
-            echo "Generate a new token at: https://github.com/settings/tokens"
+            echo "Please check GitHub App configuration"
             exit 1
 
           elif [[ "$HTTP_STATUS" == "403" ]]; then
             echo ""
-            echo "❌ GitHub token has insufficient permissions or rate limit exceeded"
+            echo "❌ GitHub App token has insufficient permissions or rate limit exceeded"
             echo "HTTP Status: $HTTP_STATUS (Forbidden)"
             echo ""
             echo "Please check:"
-            echo "  - Token has required scopes (repo, workflow)"
+            echo "  - GitHub App has required permissions (contents: read)"
+            echo "  - GitHub App is installed on this repository"
             echo "  - API rate limit status"
+            exit 1
+
+          elif [[ "$HTTP_STATUS" == "404" ]]; then
+            echo ""
+            echo "❌ Repository not found or token lacks access"
+            echo "HTTP Status: $HTTP_STATUS (Not Found)"
+            echo ""
+            echo "Please check:"
+            echo "  - GitHub App is installed on ${{ github.repository }}"
             exit 1
 
           else
@@ -371,7 +385,7 @@ jobs:
             echo ""
             echo "Please verify:"
             echo "  - GitHub API is accessible"
-            echo "  - GH_PAT secret is correctly configured"
+            echo "  - GitHub App is correctly configured"
             exit 1
           fi
 
@@ -397,11 +411,9 @@ jobs:
             echo "✓ GitHub App credentials configured"
           fi
 
-          # Fallback: Personal Access Token (kept for backward compatibility)
-          if [[ -n "${{ secrets.GH_PAT }}" ]]; then
-            echo "GITHUB_TOKEN=${{ secrets.GH_PAT }}" >> $GITHUB_ENV
-            echo "✓ GitHub PAT configured as fallback"
-          fi
+          # Use GitHub App token for all GitHub API access
+          echo "GITHUB_TOKEN=${{ steps.app-token.outputs.token }}" >> $GITHUB_ENV
+          echo "✓ GitHub App token configured"
 
           echo "✓ GitHub authentication configured"
 
