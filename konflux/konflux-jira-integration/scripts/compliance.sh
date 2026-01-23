@@ -694,26 +694,24 @@ check_enterprise_contract() {
     ecname="enterprise-contract-$application / $line"
 
     # Extract EC check run from pre-fetched data
-    check_run_data=$(echo "$all_check_runs" | yq -p=json ".check_runs[] | select(.name==\"*enterprise-contract*$line\")" 2>&1)
-    if echo "$check_run_data" | grep -q "Error:"; then
+    # Use exit code to detect yq errors instead of grep "Error:" which can match data content
+    check_run_data=$(echo "$all_check_runs" | yq -p=json ".check_runs[] | select(.name==\"*enterprise-contract*$line\")" 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
         echo "⚠️  Error parsing check runs JSON for EC:" >&3
-        echo "$check_run_data" >&3
         echo "Check runs JSON response (first 500 lines):" >&3
         echo "$all_check_runs" | head -500 >&3
         check_run_data=""
     fi
     debug_echo "[debug] EC check_run_data: $check_run_data"
-    ec=$(echo "$check_run_data" | yq ".conclusion" 2>&1)
-    if echo "$ec" | grep -q "Error:"; then
-        echo "⚠️  Error parsing EC conclusion:" >&3
-        echo "$ec" >&3
+    ec=$(echo "$check_run_data" | yq ".conclusion" 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
+        echo "⚠️  Error parsing EC conclusion" >&3
         ec=""
     fi
     # Extract PipelineRun URL from output.text (embedded in HTML link)
-    output_text=$(echo "$check_run_data" | yq ".output.text" 2>&1)
-    if echo "$output_text" | grep -q "Error:"; then
-        echo "⚠️  Error parsing EC output.text:" >&3
-        echo "$output_text" >&3
+    output_text=$(echo "$check_run_data" | yq ".output.text" 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
+        echo "⚠️  Error parsing EC output.text" >&3
         output_text=""
     fi
     ec_url=$(echo "$output_text" | sed -n 's/.*href="\(https:\/\/konflux-ui[^"]*pipelinerun\/[^"]*\)".*/\1/p' | head -1)
@@ -761,25 +759,23 @@ check_component_on_push() {
     pushname="Red Hat Konflux / $line-on-push"
 
     # Extract on-push check run from pre-fetched data
-    check_run_data=$(echo "$all_check_runs" | yq -p=json ".check_runs[] | select(.name==\"Red Hat Konflux / $line-on-push\")" 2>&1)
-    if echo "$check_run_data" | grep -q "Error:"; then
+    # Use exit code to detect yq errors instead of grep "Error:" which can match data content
+    check_run_data=$(echo "$all_check_runs" | yq -p=json ".check_runs[] | select(.name==\"Red Hat Konflux / $line-on-push\")" 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
         echo "⚠️  Error parsing check runs JSON for on-push:" >&3
-        echo "$check_run_data" >&3
         echo "Check runs JSON response (first 500 lines):" >&3
         echo "$all_check_runs" | head -500 >&3
         check_run_data=""
     fi
     debug_echo "[debug] Push check_run_data: $check_run_data"
-    push_status=$(echo "$check_run_data" | yq ".conclusion" 2>&1)
-    if echo "$push_status" | grep -q "Error:"; then
-        echo "⚠️  Error parsing push status conclusion:" >&3
-        echo "$push_status" >&3
+    push_status=$(echo "$check_run_data" | yq ".conclusion" 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
+        echo "⚠️  Error parsing push status conclusion" >&3
         push_status=""
     fi
-    push_url=$(echo "$check_run_data" | yq ".details_url" 2>&1)
-    if echo "$push_url" | grep -q "Error:"; then
-        echo "⚠️  Error parsing push details_url:" >&3
-        echo "$push_url" >&3
+    push_url=$(echo "$check_run_data" | yq ".details_url" 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
+        echo "⚠️  Error parsing push details_url" >&3
         push_url=""
     fi
     debug_echo "[debug] Push push_status=$push_status, push_url=$push_url"
