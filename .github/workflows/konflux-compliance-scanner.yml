@@ -372,21 +372,16 @@ jobs:
         run: |
           echo "Validating GitHub App token..."
 
-          # Test token validity with GitHub API
+          # Test token validity by accessing the repository
+          # Note: GitHub App tokens cannot access /user endpoint, so we check repo access instead
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/user)
+            "https://api.github.com/repos/${{ github.repository }}")
 
           if [[ "$HTTP_STATUS" == "200" ]]; then
             echo "✓ GitHub App token is valid"
-
-            # Get token info for debugging
-            USER_INFO=$(curl -s \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/user | jq -r '.login // "unknown"')
-            echo "  Authenticated as: $USER_INFO"
+            echo "  Repository access verified: ${{ github.repository }}"
 
           elif [[ "$HTTP_STATUS" == "401" ]]; then
             echo ""
@@ -403,7 +398,17 @@ jobs:
             echo ""
             echo "Please check:"
             echo "  - GitHub App has required permissions (contents: read)"
+            echo "  - GitHub App is installed on this repository"
             echo "  - API rate limit status"
+            exit 1
+
+          elif [[ "$HTTP_STATUS" == "404" ]]; then
+            echo ""
+            echo "❌ Repository not found or token lacks access"
+            echo "HTTP Status: $HTTP_STATUS (Not Found)"
+            echo ""
+            echo "Please check:"
+            echo "  - GitHub App is installed on ${{ github.repository }}"
             exit 1
 
           else
