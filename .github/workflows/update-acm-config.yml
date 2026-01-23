@@ -16,9 +16,19 @@ jobs:
       contents: write
 
     steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: "acm-infra,acm-config"
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          token: ${{ steps.app-token.outputs.token }}
           submodules: 'recursive'
           fetch-depth: 0
 
