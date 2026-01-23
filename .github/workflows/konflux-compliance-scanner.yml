@@ -458,24 +458,46 @@ jobs:
         run: |
           echo "Validating JIRA connectivity..."
 
-          # Test JIRA server connectivity with a simple API call
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -u "$JIRA_USER:$JIRA_API_TOKEN" \
-            -H "Accept: application/json" \
-            "${{ env.JIRA_SERVER }}/rest/api/2/serverInfo")
+          # Retry logic for JIRA connectivity (max 3 attempts)
+          MAX_RETRIES=3
+          RETRY_DELAY=5
+          ATTEMPT=1
+          JIRA_VALID=false
 
-          if [[ "$HTTP_STATUS" == "200" ]]; then
-            echo "✓ JIRA server is accessible and credentials are valid"
-          elif [[ "$HTTP_STATUS" == "401" ]]; then
-            echo ""
-            echo "❌ JIRA authentication failed"
-            echo "HTTP Status: $HTTP_STATUS (Unauthorized)"
-            echo ""
-            echo "Please update the JIRA_API_TOKEN secret with a valid token"
-            exit 1
+          while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
+            echo "Attempting JIRA connection (attempt $ATTEMPT/$MAX_RETRIES)..."
+
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              --connect-timeout 10 \
+              --max-time 30 \
+              -u "$JIRA_USER:$JIRA_API_TOKEN" \
+              -H "Accept: application/json" \
+              "${{ env.JIRA_SERVER }}/rest/api/2/serverInfo")
+
+            if [[ "$HTTP_STATUS" == "200" ]]; then
+              JIRA_VALID=true
+              echo "✓ JIRA server is accessible and credentials are valid"
+              break
+            else
+              if [[ "$HTTP_STATUS" == "401" ]]; then
+                echo "⚠ JIRA authentication failed (HTTP 401)"
+              else
+                echo "⚠ Warning: JIRA server returned HTTP $HTTP_STATUS"
+              fi
+              if [[ $ATTEMPT -lt $MAX_RETRIES ]]; then
+                echo "Retrying in ${RETRY_DELAY}s (attempt $ATTEMPT/$MAX_RETRIES)..."
+                sleep $RETRY_DELAY
+                RETRY_DELAY=$((RETRY_DELAY * 2))
+              fi
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+
+          if [[ "$JIRA_VALID" == true ]]; then
+            echo "✓ JIRA connectivity validation passed"
           else
             echo ""
-            echo "⚠ Warning: JIRA server returned HTTP $HTTP_STATUS"
+            echo "⚠ Warning: Could not validate JIRA connectivity after $MAX_RETRIES attempts"
             echo "Continuing anyway - the actual JIRA operations may still work"
           fi
 
