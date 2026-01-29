@@ -14,6 +14,7 @@
 .env.*
 *credentials*
 *secret*
+!*.example.yaml
 *_id*
 *_secret*
 *_key*
