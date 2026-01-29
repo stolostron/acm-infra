@@ -1,0 +1,45 @@
+# Copyright Contributors to the KubeOpenCode project
+# CronJob for scheduled batch migration of Tekton task bundles
+# Uses kubectl to create a KubeOpenCode Task on each run
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: konflux-batch-migration-cron
+  namespace: acm
+spec:
+  # Schedule: weekly on Monday at 03:00 UTC (1 hour after renovate runs)
+  schedule: "0 3 * * 1"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: acm-agent
+          restartPolicy: OnFailure
+          containers:
+            - name: task-creator
+              image: bitnami/kubectl:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  cat <<'EOF' | kubectl create -f -
+                  apiVersion: kubeopencode.io/v1alpha1
+                  kind: Task
+                  metadata:
+                    generateName: konflux-batch-migration-task-
+                    namespace: acm
+                  spec:
+                    taskTemplateRef:
+                      name: konflux-common-pipeline-migration-task-template
+                    description: |
+                      Process ALL open migration issues in batch mode.
+
+                      The agent will:
+                      1. List all issues with 'migration' label from stolostron/konflux-build-catalog
+                      2. Group changes by pipeline file
+                      3. Create a single PR addressing all issues
+                      4. Send a summary Slack notification
+                  EOF

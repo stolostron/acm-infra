@@ -1,0 +1,37 @@
+# Copyright Contributors to the KubeOpenCode project
+# Agent configuration for AI agent with credentials
+apiVersion: kubeopencode.io/v1alpha1
+kind: Agent
+metadata:
+  name: default
+spec:
+  agentImage: quay.io/kubeopencode/kubeopencode-agent-opencode:latest
+  executorImage: quay.io/kubeopencode/kubeopencode-agent-devbox:latest
+  workspaceDir: /workspace
+  serviceAccountName: acm-agent
+  maxConcurrentTasks: 1
+  config: |
+    {
+      "$schema": "https://opencode.ai/config.json",
+      "model": "google/gemini-3-pro-preview",
+      "small_model": "google/gemini-3-fast-preview",
+      "share": "disabled",
+      "autoupdate": false
+    }
+  credentials:
+    # Mount entire secret - all keys become env vars automatically
+    - name: git
+      secretRef:
+        name: git-settings
+    - name: gemini
+      secretRef:
+        name: gemini-credentials
+    # GitHub App credentials mounted as directory
+    # The devbox image has built-in scripts that automatically use these
+    # for transparent gh CLI and git authentication
+    - name: github-app
+      secretRef:
+        name: github-bot-credentials
+    - name: slack
+      secretRef:
+        name: slack-webhook-url
