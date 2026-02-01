@@ -1,0 +1,73 @@
+# Copyright Contributors to the KubeOpenCode project
+# TaskTemplate for konflux common pipeline migration tasks (batch mode)
+apiVersion: kubeopencode.io/v1alpha1
+kind: TaskTemplate
+metadata:
+  name: hive-api-upgrade-task-template
+spec:
+  # Reference the agent that will execute tasks created from this template
+  agentRef:
+    name: default
+  # Contexts that will be merged with task-specific contexts
+  contexts:
+    - name: bot-instructions
+      type: Text
+      text: |
+          # Hive API Upgrade Workflow
+
+          Upgrade Hive API to the latest version in the target repo, and create a PR.
+
+          # IMPORTANT: Command Execution Rules
+          You MUST execute ONLY the exact commands specified in the checklist below.
+          DO NOT substitute, modify, or use alternative commands.
+          For example: Use `make test` NOT `go test ./pkg/...`.
+          You don't need to clone the repository; it is already mounted via Git context as `target/`.
+
+          # Upgrade Checklist (Execute in Order)
+
+          ## Step 1: Check for Custom Upgrade Document
+          - Check if `upgrade-hive-api.md` exists in the repo root
+          - If it exists: Follow that document EXACTLY and skip the remaining steps
+          - If it does NOT exist: Proceed with Steps 2-8
+
+          ## Step 2: Check Current Version
+          - Run: `grep "github.com/openshift/hive/apis" go.mod` to get current version
+          - Fetch latest commit from master: `curl -s https://api.github.com/repos/openshift/hive/commits/master | grep -o '"sha": "[^"]*"' | head -1`
+          - If already on latest version: Skip to Step 8 with status "already_up_to_date"
+
+          ## Step 3: Verify Go Version Compatibility
+          - Command: `go version`
+          - The Hive API typically requires Go 1.22+
+          - If Go version is too old: STOP and report the incompatibility
+
+          ## Step 4: Update Hive API Dependency
+          - Command: `go get github.com/openshift/hive/apis@master`
+          - If this fails, report the error and stop
+
+          ## Step 5: Update Dependencies
+          - If `vendor/` directory exists: Run `go mod tidy && go mod vendor`
+          - If `vendor/` directory does NOT exist: Run only `go mod tidy`
+
+          ## Step 6: Run Build and Test
+          - Command: `make build` (add `GO_REQUIRED_MIN_VERSION:=` if version check fails)
+          - Command: `make test` (add `GO_REQUIRED_MIN_VERSION:=` if needed)
+          - IMPORTANT: Use ONLY `make test`. DO NOT use `go test` directly.
+          - If errors occur: Analyze and attempt to fix the issue
+          - If tests fail and cannot be fixed: STOP and report the failure
+
+          ## Step 7: Verify E2E Test Build (Optional)
+          - Command: `timeout 180 go test -c ./test/e2e -o _output/e2e.test 2>&1 || echo "E2E build skipped or timed out"`
+          - This step is OPTIONAL - if it times out or fails, continue anyway
+          - The unit tests in Step 6 are the primary verification gate
+
+          ## Step 8: Create PR (Only after Step 7 passes)
+          - Create a new branch with format: `acm-agent-upgrade-hive-api-XXXXX`
+          - Commit changes with message: `fix: upgrade Hive API to latest version`
+          - Push branch and create PR
+          - IMPORTANT: Only create PR if build and tests pass
+          - Label PR with `automated/hive-api-upgrade` and `ok-to-test`
+
+          ## Failure Handling
+          - If any critical step (1-7) fails and cannot be fixed: Mark status as "failed"
+          - Always write result.json with detailed reason before exiting
+          - Do NOT create a PR if build or tests fail

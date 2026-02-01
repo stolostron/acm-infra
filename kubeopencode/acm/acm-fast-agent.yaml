@@ -3,17 +3,17 @@
 apiVersion: kubeopencode.io/v1alpha1
 kind: Agent
 metadata:
-  name: default
+  name: fast
 spec:
   agentImage: quay.io/kubeopencode/kubeopencode-agent-opencode:latest
   executorImage: quay.io/kubeopencode/kubeopencode-agent-devbox:latest
   workspaceDir: /workspace
   serviceAccountName: acm-agent
-  maxConcurrentTasks: 1
+  maxConcurrentTasks: 2
   config: |
     {
       "$schema": "https://opencode.ai/config.json",
-      "model": "google/gemini-3-pro-preview",
+      "model": "google/gemini-3-fast-preview",
       "small_model": "google/gemini-3-fast-preview",
       "share": "disabled",
       "autoupdate": false

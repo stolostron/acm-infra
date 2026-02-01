@@ -1,0 +1,19 @@
+# Copyright Contributors to the KubeOpenCode project
+# ConfigMap for Hive API upgrade target repositories
+# Format: org,repo,branch (one target per line)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hive-api-upgrade-targets
+  namespace: acm
+  labels:
+    app: hive-api-upgrade
+data:
+  # Each line: org,repo,branch
+  targets.txt: |
+    stolostron,managedcluster-import-controller,main
+    stolostron,managedcluster-import-controller,backplane-2.10
+    stolostron,managedcluster-import-controller,backplane-2.9
+    stolostron,managedcluster-import-controller,backplane-2.8
+    stolostron,managedcluster-import-controller,backplane-2.7
+    stolostron,managedcluster-import-controller,backplane-2.6

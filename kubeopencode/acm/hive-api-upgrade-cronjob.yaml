@@ -1,0 +1,99 @@
+# Copyright Contributors to the KubeOpenCode project
+# CronJob for scheduled Hive API upgrade across multiple repositories
+# Uses ConfigMap to define target repos/branches and creates Task for each combination
+# Test:
+# kubectl create job test-hive-upgrade --from=cronjob/hive-api-upgrade-cron -n acm
+# kubectl get jobs -n acm -l job-name=test-hive-upgrade
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hive-api-upgrade-cron
+  namespace: acm
+  labels:
+    app: hive-api-upgrade
+spec:
+  # Schedule: weekly on Monday at 03:00 UTC (1 hour after renovate runs)
+  schedule: "0 3 * * 1"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: acm-agent
+          restartPolicy: OnFailure
+          volumes:
+            - name: targets-config
+              configMap:
+                name: hive-api-upgrade-targets
+          containers:
+            - name: task-creator
+              image: bitnami/kubectl:latest
+              volumeMounts:
+                - name: targets-config
+                  mountPath: /config
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+
+                  # Generate batch ID for this run
+                  BATCH_ID="hive-upgrade-$(date +%Y%m%d%H%M%S)"
+                  echo "Starting batch: $BATCH_ID"
+
+                  # Read targets from ConfigMap (format: org,repo,branch)
+                  TARGETS_FILE="/config/targets.txt"
+                  if [ ! -f "$TARGETS_FILE" ]; then
+                    echo "Error: targets.txt not found"
+                    exit 1
+                  fi
+
+                  COUNT=0
+                  while IFS= read -r line || [ -n "$line" ]; do
+                    # Skip empty lines and comments
+                    case "$line" in
+                      ""|\#*) continue ;;
+                    esac
+
+                    # Parse org,repo,branch
+                    ORG=$(echo "$line" | cut -d',' -f1)
+                    REPO=$(echo "$line" | cut -d',' -f2)
+                    BRANCH=$(echo "$line" | cut -d',' -f3)
+                    URL="https://github.com/${ORG}/${REPO}.git"
+
+                    echo "Creating task for: $ORG/$REPO@$BRANCH"
+
+                    cat <<EOF | kubectl create -f -
+                  apiVersion: kubeopencode.io/v1alpha1
+                  kind: Task
+                  metadata:
+                    generateName: hive-api-upgrade-task-
+                    namespace: acm
+                    labels:
+                      batch.kubeopencode.io/job-type: hive-api-upgrade
+                      batch.kubeopencode.io/batch-id: "$BATCH_ID"
+                      batch.kubeopencode.io/target-org: "$ORG"
+                      batch.kubeopencode.io/target-repo: "$REPO"
+                      batch.kubeopencode.io/target-branch: "$BRANCH"
+                  spec:
+                    taskTemplateRef:
+                      name: hive-api-upgrade-task-template
+                    description: |
+                      Upgrade Hive API to the latest version.
+                      Target repo: $ORG/$REPO
+                      Target branch: $BRANCH
+                    contexts:
+                      - type: Git
+                        git:
+                          repository: $URL
+                          ref: $BRANCH
+                        mountPath: target
+                  EOF
+
+                    echo "Task created for $ORG/$REPO@$BRANCH"
+                    COUNT=$((COUNT + 1))
+                  done < "$TARGETS_FILE"
+
+                  echo "Batch $BATCH_ID completed: $COUNT tasks created"

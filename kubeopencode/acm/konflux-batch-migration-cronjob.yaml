@@ -1,6 +1,9 @@
 # Copyright Contributors to the KubeOpenCode project
 # CronJob for scheduled batch migration of Tekton task bundles
 # Uses kubectl to create a KubeOpenCode Task on each run
+# Test:
+# kubectl create job test-konflux-migration --from=cronjob/konflux-batch-migration-cron -n acm
+# kubectl get jobs -n acm -l job-name=test-konflux-migration
 apiVersion: batch/v1
 kind: CronJob
 metadata:

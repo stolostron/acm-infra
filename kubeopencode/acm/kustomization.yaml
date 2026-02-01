@@ -4,7 +4,11 @@ namespace: acm
 resources:
   - namespace.yaml
   - serviceaccount.yaml
+  - acm-fast-agent.yaml
   - acm-default-agent.yaml
   - konflux-common-pipeline-migration-task-template.yaml
   - konflux-batch-migration-cronjob.yaml
+  - hive-api-upgrade-targets-configmap.yaml
+  - hive-api-upgrade-task-template.yaml
+  - hive-api-upgrade-cronjob.yaml
   - secrets.yaml
