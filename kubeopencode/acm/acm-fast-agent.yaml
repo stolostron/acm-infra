@@ -13,8 +13,8 @@ spec:
   config: |
     {
       "$schema": "https://opencode.ai/config.json",
-      "model": "google/gemini-3-fast-preview",
-      "small_model": "google/gemini-3-fast-preview",
+      "model": "google/gemini-3-flash-preview",
+      "small_model": "google/gemini-3-flash-preview",
       "share": "disabled",
       "autoupdate": false
     }
