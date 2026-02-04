@@ -1,0 +1,15 @@
+# Copyright Contributors to the KubeOpenCode project
+# ConfigMap containing target repositories for hive-api patch scanning
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hive-api-patch-targets
+  namespace: acm
+data:
+  # Label to filter PRs
+  label.txt: "hive-apis"
+
+  # Target repositories (one per line, format: owner/repo)
+  targets.txt: |
+    stolostron/multicloud-operators-foundation
+    # Add more repos as needed

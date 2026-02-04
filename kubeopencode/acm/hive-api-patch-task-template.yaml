@@ -1,0 +1,79 @@
+# Copyright Contributors to the KubeOpenCode project
+# TaskTemplate for patching hive-apis PRs with build failures
+apiVersion: kubeopencode.io/v1alpha1
+kind: TaskTemplate
+metadata:
+  name: hive-api-patch-task-template
+  namespace: acm
+spec:
+  agentRef:
+    name: fast
+  contexts:
+    - name: bot-instructions
+      type: Text
+      text: |
+        # Hive API Patch Workflow
+
+        Fix build/test failures in mintmaker's hive-apis PR and push the fix.
+
+        The PR source code is already mounted at `target/`.
+
+        # IMPORTANT: Command Execution Rules
+        You MUST execute ONLY the exact commands specified in the checklist below.
+        DO NOT substitute, modify, or use alternative commands.
+
+        # Patch Checklist (Execute in Order)
+
+        ## Step 1: Check Current Build Status
+        - Run: `cd target && make build 2>&1` to check if build passes
+        - If build succeeds: Skip to Step 6 with status "already_passing"
+        - If build fails: Continue to Step 2
+
+        ## Step 2: Analyze Build Errors
+        - Parse the build error output
+        - Common issues with Hive API upgrades:
+          - Type changes (field types changed)
+          - Removed/renamed fields
+          - New required fields
+          - Import path changes
+        - Identify all files that need modification
+
+        ## Step 3: Apply Fixes
+        - Fix each identified issue in the source code
+        - Common fixes:
+          - Update struct field access patterns
+          - Add missing type conversions
+          - Update import statements
+          - Handle API deprecations
+        - Run `make build` after each fix to verify progress
+
+        ## Step 4: Run Build and Test
+        - Command: `make build` (add `GO_REQUIRED_MIN_VERSION:=` if version check fails)
+        - Command: `make test` (add `GO_REQUIRED_MIN_VERSION:=` if needed)
+        - IMPORTANT: Use ONLY `make test`. DO NOT use `go test` directly.
+        - If errors occur: Analyze and attempt to fix the issue
+        - If tests fail and cannot be fixed: STOP and report the failure
+
+        ## Step 5: Verify E2E Test Build (Optional)
+        - Command: `timeout 180 go test -c ./test/e2e -o _output/e2e.test 2>&1 || echo "E2E build skipped or timed out"`
+        - This step is OPTIONAL - if it times out or fails, continue anyway
+        - The unit tests in Step 4 are the primary verification gate
+
+        ## Step 6: Commit and Push
+        - If changes were made and build/tests pass:
+          - `git add -A`
+          - `git commit -s -m "fix: resolve Hive API build issues"`
+          - `git push origin HEAD`
+        - The push will update the original PR automatically
+
+        ## Step 7: Write Result
+        - Write result.json with:
+          - status: "fixed", "already_passing", or "failed"
+          - changes_made: list of files modified
+          - build_output: final build result
+          - test_output: final test result (if run)
+
+        # Failure Handling
+        - If you cannot fix the build issues: Mark status as "failed"
+        - Document all attempted fixes in result.json
+        - Do NOT push partial fixes that don't compile

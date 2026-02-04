@@ -1,0 +1,132 @@
+# Copyright Contributors to the KubeOpenCode project
+# CronJob for scanning hive-apis PRs and creating patch tasks
+# Scans repositories for open PRs with hive-apis label and creates Tasks to fix build failures
+# Test:
+# kubectl create job test-hive-patch --from=cronjob/hive-api-patch-cron -n acm
+# kubectl logs -f job/test-hive-patch -n acm
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hive-api-patch-cron
+  namespace: acm
+  labels:
+    app: hive-api-patch
+spec:
+  # Schedule: daily at 12:00 UTC+8 = 04:00 UTC
+  schedule: "0 4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: acm-agent
+          restartPolicy: OnFailure
+          volumes:
+            - name: targets-config
+              configMap:
+                name: hive-api-patch-targets
+            - name: github-app-creds
+              secret:
+                secretName: github-bot-credentials
+          containers:
+            - name: pr-scanner
+              image: quay.io/kubeopencode/kubeopencode-agent-devbox:latest
+              env:
+                - name: GH_APP_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-bot-credentials
+                      key: GH_APP_ID
+                - name: GH_APP_INSTALLATION_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-bot-credentials
+                      key: GH_APP_INSTALLATION_ID
+                - name: GH_APP_PRIVATE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-bot-credentials
+                      key: GH_APP_PRIVATE_KEY
+              volumeMounts:
+                - name: targets-config
+                  mountPath: /config
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -e
+
+                  # Setup GitHub App authentication
+                  source /usr/local/bin/github-token-manager.sh
+
+                  BATCH_ID="hive-patch-$(date +%Y%m%d%H%M%S)"
+                  LABEL=$(cat /config/label.txt 2>/dev/null || echo "hive-apis")
+                  echo "Starting batch: $BATCH_ID, Label: $LABEL"
+
+                  COUNT=0
+                  while IFS= read -r REPO || [ -n "$REPO" ]; do
+                    # Skip empty lines and comments
+                    case "$REPO" in
+                      ""|\#*) continue ;;
+                    esac
+
+                    echo "Scanning PRs in $REPO with label: $LABEL"
+
+                    # Get open PRs with the label
+                    PRS=$(gh pr list --repo "$REPO" --label "$LABEL" --state open \
+                      --json number,title,headRefName \
+                      2>/dev/null || echo "[]")
+
+                    if [ "$PRS" = "[]" ]; then
+                      echo "No open PRs with label $LABEL in $REPO"
+                      continue
+                    fi
+
+                    # Process each PR
+                    echo "$PRS" | jq -c '.[]' | while read -r PR; do
+                      PR_NUM=$(echo "$PR" | jq -r '.number')
+                      PR_TITLE=$(echo "$PR" | jq -r '.title')
+                      HEAD_BRANCH=$(echo "$PR" | jq -r '.headRefName')
+
+                      # Since PRs are from same repo branches, use the target repo URL
+                      REPO_URL="https://github.com/${REPO}.git"
+
+                      echo "Creating task for PR #$PR_NUM: $PR_TITLE"
+                      echo "  Branch: $HEAD_BRANCH"
+
+                      cat <<EOF | kubectl create -f -
+                  apiVersion: kubeopencode.io/v1alpha1
+                  kind: Task
+                  metadata:
+                    generateName: hive-api-patch-task-
+                    namespace: acm
+                    labels:
+                      batch.kubeopencode.io/job-type: hive-api-patch
+                      batch.kubeopencode.io/batch-id: "$BATCH_ID"
+                      batch.kubeopencode.io/target-repo: "$(echo $REPO | tr '/' '-')"
+                      batch.kubeopencode.io/pr-number: "$PR_NUM"
+                  spec:
+                    taskTemplateRef:
+                      name: hive-api-patch-task-template
+                    description: |
+                      Fix build issues in PR #$PR_NUM: $PR_TITLE
+
+                      Repository: $REPO
+                      PR URL: https://github.com/$REPO/pull/$PR_NUM
+                      Branch: $HEAD_BRANCH
+                    contexts:
+                      - name: pr-source
+                        type: Git
+                        git:
+                          repository: $REPO_URL
+                          ref: $HEAD_BRANCH
+                        mountPath: target
+                  EOF
+
+                      echo "Task created for PR #$PR_NUM"
+                      COUNT=$((COUNT + 1))
+                    done
+                  done < /config/targets.txt
+
+                  echo "Batch $BATCH_ID completed: $COUNT tasks created"

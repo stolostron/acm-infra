@@ -11,4 +11,7 @@ resources:
   - hive-api-upgrade-targets-configmap.yaml
   - hive-api-upgrade-task-template.yaml
   - hive-api-upgrade-cronjob.yaml
+  - hive-api-patch-targets-configmap.yaml
+  - hive-api-patch-task-template.yaml
+  - hive-api-patch-cronjob.yaml
   - secrets.yaml
