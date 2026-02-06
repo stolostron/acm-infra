@@ -4,9 +4,34 @@ This directory contains scripts and configurations for centralized golangci-lint
 
 ## Quick Start
 
-### For Individual Repositories
+### Recommended: One-Command Lint (run-lint.sh)
 
-Add this to your `Makefile`:
+Add this single line to your `Makefile`:
+
+```makefile
+.PHONY: lint
+lint:
+	@curl -sSL https://raw.githubusercontent.com/stolostron/acm-infra/main/scripts/lint/run-lint.sh | bash
+```
+
+That's it! The script will:
+1. Auto-detect your Go version
+2. Install a compatible golangci-lint version (if needed)
+3. Download the correct config file to a temp directory (if no local config exists)
+4. Run `golangci-lint run`
+
+**Zero configuration needed** - just run `make lint` and everything works automatically.
+
+**Seamless Go version upgrades**: When you upgrade Go from 1.21 to 1.25, the script automatically switches to golangci-lint v2 with the correct config. No manual migration required!
+
+### Configuration Priority
+
+1. **Local config** (`.golangci.yml` or `.golangci.yaml`) - if exists, used as-is
+2. **Remote config** - downloaded to `/tmp/golangci-lint-config/` based on Go version
+
+### Alternative: Separate Install and Run (install-golangci-lint.sh)
+
+If you prefer to install separately:
 
 ```makefile
 .PHONY: lint
@@ -18,12 +43,7 @@ install-golangci-lint:
 	@curl -sfL https://raw.githubusercontent.com/stolostron/acm-infra/main/scripts/lint/install-golangci-lint.sh | bash
 ```
 
-That's it! The script will:
-1. Auto-detect your Go version
-2. Select and install a compatible golangci-lint version
-3. Auto-download the correct `.golangci.yml` config file to your project root
-
-**No configuration needed** - just run `make lint` and everything works automatically.
+Note: This approach downloads the config to your project root (`.golangci.yml`).
 
 ### Override Version (Optional)
 
@@ -39,7 +59,8 @@ GOLANGCI_LINT_VERSION=v1.59.1 make lint
 
 | File | Description |
 |------|-------------|
-| `install-golangci-lint.sh` | Main installation script with Go version detection |
+| `run-lint.sh` | **Recommended**: One-command lint runner (install + config + run) |
+| `install-golangci-lint.sh` | Installation script with Go version detection |
 | `golangci-lint-version.sh` | Version mapping documentation |
 | `golangci-v1.yml` | Default config for golangci-lint v1.x |
 | `golangci-v2.yml` | Default config for golangci-lint v2.x |
@@ -106,6 +127,14 @@ As teams grow, ensuring everyone runs the same version of golangci-lint becomes 
 - Different linting results locally vs CI
 - "Works on my machine" syndrome
 - Difficulty reproducing CI failures
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GOLANGCI_CONFIG_DIR` | `/tmp/golangci-lint-config` | Config cache directory |
+| `GOLANGCI_UPDATE_CONFIG` | `false` | Force re-download config if set to `true` |
+| `GOLANGCI_LINT_VERSION` | (auto) | Override auto-detected golangci-lint version |
 
 ### Alternative Approaches
 
