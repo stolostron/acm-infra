@@ -25,15 +25,6 @@ if ! command -v go &>/dev/null; then
     exit 1
 fi
 
-# Determine script directory for sourcing version file when run locally
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || echo ".")"
-
-# Source version file if available locally, otherwise use default
-if [[ -f "${SCRIPT_DIR}/golangci-lint-version.sh" ]]; then
-    # shellcheck source=golangci-lint-version.sh
-    source "${SCRIPT_DIR}/golangci-lint-version.sh"
-fi
-
 ###############################################################################
 # Go version to golangci-lint version compatibility mapping
 #
@@ -82,9 +73,6 @@ select_compatible_version() {
         return
     fi
 
-    local go_version
-    go_version=$(go version 2>/dev/null | grep -oE 'go[0-9]+\.[0-9]+' | head -1)
-
     # Select compatible version based on Go version
     # All projects require Go 1.23+
     if [[ "${go_ver_num}" -ge 124 ]]; then
@@ -100,7 +88,7 @@ select_compatible_version() {
 
 # Determine golangci-lint version
 # Priority: 1. Environment variable, 2. Auto-detect based on Go version
-if [[ -n "${GOLANGCI_LINT_VERSION}" ]]; then
+if [[ -n "${GOLANGCI_LINT_VERSION:-}" ]]; then
     # User explicitly set version via environment variable
     echo "Using user-specified golangci-lint version: ${GOLANGCI_LINT_VERSION}"
 else
@@ -226,17 +214,13 @@ else
 fi
 
 ###############################################################################
-# Auto-download configuration file
+# Auto-download golangci-lint v2 configuration file
 #
-# Downloads the appropriate golangci-lint config file based on major version.
 # The config file is placed in the project root as .golangci.yml so that
 # golangci-lint can find it automatically without -c flag.
 ###############################################################################
 
-# Determine config file URL based on golangci-lint major version
 CONFIG_BASE_URL="https://raw.githubusercontent.com/stolostron/acm-infra/main/scripts/lint"
-
-# All supported versions use v2 config
 CONFIG_FILE="golangci-v2.yml"
 CONFIG_URL="${CONFIG_BASE_URL}/${CONFIG_FILE}"
 LOCAL_CONFIG=".golangci.yml"
