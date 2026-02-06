@@ -15,14 +15,16 @@ lint:
 ```
 
 That's it! The script will:
-1. Auto-detect your Go version
+1. Auto-detect Go version from `go.mod` (falls back to system Go if no `go.mod`)
 2. Install a compatible golangci-lint version (if needed)
 3. Download the correct config file to a temp directory (if no local config exists)
 4. Run `golangci-lint run`
 
 **Zero configuration needed** - just run `make lint` and everything works automatically.
 
-**Seamless Go version upgrades**: When you upgrade Go from 1.21 to 1.25, the script automatically switches to golangci-lint v2 with the correct config. No manual migration required!
+**Seamless Go version upgrades**: When you update `go.mod` from Go 1.21 to 1.25, the script automatically switches to golangci-lint v2 with the correct config. No manual migration required!
+
+**go.mod-based detection**: The script reads the Go version from your project's `go.mod`, not the system-installed Go. This ensures consistent behavior between local development (where you may have a newer Go) and CI (which matches `go.mod`).
 
 ### Configuration Priority
 
@@ -69,7 +71,7 @@ GOLANGCI_LINT_VERSION=v1.59.1 make lint
 
 ## Go Version Compatibility
 
-The script automatically selects the correct golangci-lint version based on your Go version:
+The script reads the Go version from `go.mod` and selects the correct golangci-lint version accordingly (falls back to system Go version if no `go.mod` is found):
 
 | Go Version | golangci-lint Version | Config File |
 |------------|----------------------|-------------|

@@ -48,9 +48,23 @@ fi
 ###############################################################################
 
 # Function to get Go version as comparable number (e.g., 1.23 -> 123, 1.25 -> 125)
+# Priority: go.mod version (project requirement) > system Go version
 get_go_version_num() {
-    local go_version
-    go_version=$(go version 2>/dev/null | grep -oE 'go[0-9]+\.[0-9]+' | head -1 | sed 's/go//')
+    local go_version=""
+
+    # Priority 1: Read from go.mod (reflects the project's actual Go version requirement)
+    if [[ -f "go.mod" ]]; then
+        go_version=$(grep -oE '^go [0-9]+\.[0-9]+' go.mod | sed 's/go //')
+    fi
+
+    # Priority 2: Fall back to system Go version
+    if [[ -z "${go_version}" ]]; then
+        go_version=$(go version 2>/dev/null | grep -oE 'go[0-9]+\.[0-9]+' | head -1 | sed 's/go//')
+        if [[ -n "${go_version}" ]]; then
+            echo "No go.mod found, using system Go version: ${go_version}" >&2
+        fi
+    fi
+
     if [[ -n "${go_version}" ]]; then
         # Convert 1.23 to 123, 1.25 to 125, etc.
         echo "${go_version}" | awk -F. '{printf "%d%02d", $1, $2}'
@@ -98,10 +112,15 @@ if [[ -n "${GOLANGCI_LINT_VERSION}" ]]; then
     # User explicitly set version via environment variable
     echo "Using user-specified golangci-lint version: ${GOLANGCI_LINT_VERSION}"
 else
-    # Auto-detect compatible version based on Go version
+    # Auto-detect compatible version based on Go version (go.mod priority)
     GOLANGCI_LINT_VERSION=$(select_compatible_version)
-    GO_VERSION=$(go version 2>/dev/null | grep -oE 'go[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
-    echo "Detected Go version: ${GO_VERSION}"
+    if [[ -f "go.mod" ]]; then
+        GO_VERSION=$(grep -oE '^go [0-9]+\.[0-9]+' go.mod | sed 's/go //')
+        echo "Detected Go version from go.mod: ${GO_VERSION}"
+    else
+        GO_VERSION=$(go version 2>/dev/null | grep -oE 'go[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+        echo "Detected system Go version: ${GO_VERSION}"
+    fi
     echo "Selected compatible golangci-lint version: ${GOLANGCI_LINT_VERSION}"
 fi
 

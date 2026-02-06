@@ -29,7 +29,16 @@ CONFIG_PATH=""
 # Step 1: Detect Go version and determine golangci-lint version
 detect_versions() {
     local go_version
-    go_version=$(go version | grep -oE 'go[0-9]+\.[0-9]+' | sed 's/go//')
+
+    # Priority: go.mod version (project requirement) > system Go version
+    if [[ -f "go.mod" ]]; then
+        go_version=$(grep -oE '^go [0-9]+\.[0-9]+' go.mod | sed 's/go //')
+    fi
+
+    if [[ -z "${go_version:-}" ]]; then
+        go_version=$(go version | grep -oE 'go[0-9]+\.[0-9]+' | sed 's/go//')
+        echo "No go.mod found, using system Go version: $go_version"
+    fi
 
     local major minor
     major=$(echo "$go_version" | cut -d. -f1)
