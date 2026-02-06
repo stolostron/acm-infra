@@ -47,14 +47,15 @@ detect_versions() {
 
     # Determine golangci-lint version based on Go version
     # Reference: https://golangci-lint.run/product/roadmap/
+    # v2.4.0+ requires Go 1.24+, v2.3.1 is the last v2 supporting Go 1.23
     if (( major == 1 && minor >= 24 )) || (( major > 1 )); then
-        LINT_VERSION="v2.1.6"
+        LINT_VERSION="v2.8.0"
         CONFIG_FILE="golangci-v2.yml"
     elif (( major == 1 && minor == 23 )); then
-        LINT_VERSION="v1.62.2"
-        CONFIG_FILE="golangci-v1.yml"
+        LINT_VERSION="v2.3.1"
+        CONFIG_FILE="golangci-v2.yml"
     elif (( major == 1 && minor >= 21 )); then
-        LINT_VERSION="v1.59.1"
+        LINT_VERSION="v1.64.8"
         CONFIG_FILE="golangci-v1.yml"
     else
         LINT_VERSION="v1.55.2"

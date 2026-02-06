@@ -41,10 +41,10 @@ fi
 # Reference: https://github.com/golangci/golangci-lint/issues/5032
 #
 # Compatibility table:
-#   Go 1.21, 1.22       -> golangci-lint v1.59.x (last v1 supporting these)
-#   Go 1.23             -> golangci-lint v1.60.0+ or v2.0.0+
-#   Go 1.24             -> golangci-lint v1.64.0+ or v2.0.0+
-#   Go 1.25+            -> golangci-lint v2.4.0+
+#   Go 1.24+            -> golangci-lint v2.8.0
+#   Go 1.23             -> golangci-lint v2.3.1 (last v2 supporting Go 1.23)
+#   Go 1.21, 1.22       -> golangci-lint v1.64.8 (latest v1)
+#   Go 1.20 or earlier  -> golangci-lint v1.55.2
 ###############################################################################
 
 # Function to get Go version as comparable number (e.g., 1.23 -> 123, 1.25 -> 125)
@@ -80,7 +80,7 @@ select_compatible_version() {
 
     if [[ "${go_ver_num}" -eq 0 ]]; then
         echo "Warning: Could not detect Go version, using default golangci-lint version" >&2
-        echo "${GOLANGCI_LINT_VERSION:-v2.6.2}"
+        echo "${GOLANGCI_LINT_VERSION:-v2.8.0}"
         return
     fi
 
@@ -88,18 +88,15 @@ select_compatible_version() {
     go_version=$(go version 2>/dev/null | grep -oE 'go[0-9]+\.[0-9]+' | head -1)
 
     # Select compatible version based on Go version
-    if [[ "${go_ver_num}" -ge 125 ]]; then
-        # Go 1.25+ requires golangci-lint v2.4.0+
-        echo "v2.6.2"
-    elif [[ "${go_ver_num}" -ge 124 ]]; then
-        # Go 1.24 requires golangci-lint v1.64.0+ or v2.0.0+
-        echo "v2.6.2"
+    if [[ "${go_ver_num}" -ge 124 ]]; then
+        # Go 1.24+ uses latest golangci-lint v2
+        echo "v2.8.0"
     elif [[ "${go_ver_num}" -ge 123 ]]; then
-        # Go 1.23 requires golangci-lint v1.60.0+ or v2.0.0+
-        echo "v1.62.2"
+        # Go 1.23 uses v2.3.1 (last v2 supporting Go 1.23)
+        echo "v2.3.1"
     elif [[ "${go_ver_num}" -ge 121 ]]; then
-        # Go 1.21, 1.22 use golangci-lint v1.59.x
-        echo "v1.59.1"
+        # Go 1.21, 1.22 use latest golangci-lint v1
+        echo "v1.64.8"
     else
         # Go 1.20 or earlier use older golangci-lint
         echo "v1.55.2"

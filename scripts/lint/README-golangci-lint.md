@@ -75,11 +75,10 @@ The script reads the Go version from `go.mod` and selects the correct golangci-l
 
 | Go Version | golangci-lint Version | Config File |
 |------------|----------------------|-------------|
+| Go 1.24+ | v2.8.0 | `golangci-v2.yml` |
+| Go 1.23 | v2.3.1 | `golangci-v2.yml` |
+| Go 1.21, 1.22 | v1.64.8 | `golangci-v1.yml` |
 | Go 1.20 or earlier | v1.55.2 | `golangci-v1.yml` |
-| Go 1.21, 1.22 | v1.59.1 | `golangci-v1.yml` |
-| Go 1.23 | v1.62.2 | `golangci-v1.yml` |
-| Go 1.24+ | v2.6.2 | `golangci-v2.yml` |
-| Go 1.25+ | v2.6.2 | `golangci-v2.yml` |
 
 **Important**: golangci-lint must be built with a Go version >= your project's Go version. Using the official pre-compiled binaries (which this script does) ensures compatibility.
 
