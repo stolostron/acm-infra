@@ -40,11 +40,9 @@ fi
 # golangci-lint must be built with Go version >= project's Go version
 # Reference: https://github.com/golangci/golangci-lint/issues/5032
 #
-# Compatibility table:
-#   Go 1.24+            -> golangci-lint v2.8.0
-#   Go 1.23             -> golangci-lint v2.3.1 (last v2 supporting Go 1.23)
-#   Go 1.21, 1.22       -> golangci-lint v1.64.8 (latest v1)
-#   Go 1.20 or earlier  -> golangci-lint v1.55.2
+# Compatibility table (all projects require Go 1.23+):
+#   Go 1.24+  -> golangci-lint v2.8.0
+#   Go 1.23   -> golangci-lint v2.3.1 (last v2 supporting Go 1.23)
 ###############################################################################
 
 # Function to get Go version as comparable number (e.g., 1.23 -> 123, 1.25 -> 125)
@@ -88,18 +86,15 @@ select_compatible_version() {
     go_version=$(go version 2>/dev/null | grep -oE 'go[0-9]+\.[0-9]+' | head -1)
 
     # Select compatible version based on Go version
+    # All projects require Go 1.23+
     if [[ "${go_ver_num}" -ge 124 ]]; then
-        # Go 1.24+ uses latest golangci-lint v2
         echo "v2.8.0"
     elif [[ "${go_ver_num}" -ge 123 ]]; then
-        # Go 1.23 uses v2.3.1 (last v2 supporting Go 1.23)
+        # v2.3.1 is the last v2 release supporting Go 1.23
         echo "v2.3.1"
-    elif [[ "${go_ver_num}" -ge 121 ]]; then
-        # Go 1.21, 1.22 use latest golangci-lint v1
-        echo "v1.64.8"
     else
-        # Go 1.20 or earlier use older golangci-lint
-        echo "v1.55.2"
+        echo "Error: Go version too old. Minimum required: Go 1.23" >&2
+        exit 1
     fi
 }
 
@@ -241,22 +236,14 @@ fi
 # Determine config file URL based on golangci-lint major version
 CONFIG_BASE_URL="https://raw.githubusercontent.com/stolostron/acm-infra/main/scripts/lint"
 
-# Check major version (v1.x.x or v2.x.x)
-MAJOR_VERSION="${GOLANGCI_LINT_VERSION%%.*}"
-MAJOR_VERSION="${MAJOR_VERSION#v}"
-
-if [[ "${MAJOR_VERSION}" -ge 2 ]]; then
-    CONFIG_FILE="golangci-v2.yml"
-else
-    CONFIG_FILE="golangci-v1.yml"
-fi
-
+# All supported versions use v2 config
+CONFIG_FILE="golangci-v2.yml"
 CONFIG_URL="${CONFIG_BASE_URL}/${CONFIG_FILE}"
 LOCAL_CONFIG=".golangci.yml"
 
 # Download config file if not exists or if user wants to update
 download_config() {
-    echo "Downloading golangci-lint config for v${MAJOR_VERSION}.x..."
+    echo "Downloading golangci-lint v2 config..."
     if curl -sfL "${CONFIG_URL}" -o "${LOCAL_CONFIG}"; then
         echo "Configuration saved to ${LOCAL_CONFIG}"
         return 0
@@ -269,17 +256,10 @@ download_config() {
 
 # Check if config already exists
 if [[ -f "${LOCAL_CONFIG}" ]]; then
-    # Check if existing config matches the required major version
     if grep -q "^version: \"2\"" "${LOCAL_CONFIG}" 2>/dev/null; then
-        EXISTING_VERSION=2
+        echo "Configuration ${LOCAL_CONFIG} already exists (v2 format)"
     else
-        EXISTING_VERSION=1
-    fi
-
-    if [[ "${EXISTING_VERSION}" -eq "${MAJOR_VERSION}" ]]; then
-        echo "Configuration ${LOCAL_CONFIG} already exists and matches v${MAJOR_VERSION}.x"
-    else
-        echo "Warning: Existing ${LOCAL_CONFIG} is for v${EXISTING_VERSION}.x but golangci-lint v${MAJOR_VERSION}.x is installed"
+        echo "Warning: Existing ${LOCAL_CONFIG} is not v2 format"
         if [[ "${GOLANGCI_UPDATE_CONFIG:-}" == "true" ]]; then
             download_config
         else

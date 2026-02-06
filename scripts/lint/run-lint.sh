@@ -24,7 +24,6 @@ CONFIG_CACHE_DIR="${GOLANGCI_CONFIG_DIR:-/tmp/golangci-lint-config}"
 # Global variables set by detect_versions / install_lint
 LINT_VERSION=""
 LINT_BIN=""
-CONFIG_FILE=""
 CONFIG_PATH=""
 
 # Step 1: Detect Go version and determine golangci-lint version
@@ -46,20 +45,15 @@ detect_versions() {
     minor=$(echo "$go_version" | cut -d. -f2)
 
     # Determine golangci-lint version based on Go version
-    # Reference: https://golangci-lint.run/product/roadmap/
+    # All projects require Go 1.23+, always use golangci-lint v2
     # v2.4.0+ requires Go 1.24+, v2.3.1 is the last v2 supporting Go 1.23
     if (( major == 1 && minor >= 24 )) || (( major > 1 )); then
         LINT_VERSION="v2.8.0"
-        CONFIG_FILE="golangci-v2.yml"
     elif (( major == 1 && minor == 23 )); then
         LINT_VERSION="v2.3.1"
-        CONFIG_FILE="golangci-v2.yml"
-    elif (( major == 1 && minor >= 21 )); then
-        LINT_VERSION="v1.64.8"
-        CONFIG_FILE="golangci-v1.yml"
     else
-        LINT_VERSION="v1.55.2"
-        CONFIG_FILE="golangci-v1.yml"
+        echo "Error: Go ${go_version} is not supported. Minimum required: Go 1.23" >&2
+        exit 1
     fi
 
     # Allow override via environment variable
@@ -144,11 +138,11 @@ get_config() {
 
     # Priority 2: Download to temp dir
     mkdir -p "$CONFIG_CACHE_DIR"
-    CONFIG_PATH="${CONFIG_CACHE_DIR}/${CONFIG_FILE}"
+    CONFIG_PATH="${CONFIG_CACHE_DIR}/golangci-v2.yml"
 
     if [[ ! -f "$CONFIG_PATH" ]] || [[ "${GOLANGCI_UPDATE_CONFIG:-false}" == "true" ]]; then
-        echo "Downloading config: $CONFIG_FILE"
-        curl -sSL "${SCRIPT_URL}/${CONFIG_FILE}" -o "$CONFIG_PATH"
+        echo "Downloading config: golangci-v2.yml"
+        curl -sSL "${SCRIPT_URL}/golangci-v2.yml" -o "$CONFIG_PATH"
     else
         echo "Using cached config: $CONFIG_PATH"
     fi

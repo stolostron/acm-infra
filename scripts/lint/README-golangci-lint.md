@@ -22,7 +22,7 @@ That's it! The script will:
 
 **Zero configuration needed** - just run `make lint` and everything works automatically.
 
-**Seamless Go version upgrades**: When you update `go.mod` from Go 1.21 to 1.25, the script automatically switches to golangci-lint v2 with the correct config. No manual migration required!
+**Seamless Go version upgrades**: When you update `go.mod` (e.g., Go 1.23 to 1.25), the script automatically selects the correct golangci-lint v2 version. No manual migration required!
 
 **go.mod-based detection**: The script reads the Go version from your project's `go.mod`, not the system-installed Go. This ensures consistent behavior between local development (where you may have a newer Go) and CI (which matches `go.mod`).
 
@@ -52,7 +52,7 @@ Note: This approach downloads the config to your project root (`.golangci.yml`).
 If you need to use a specific version:
 
 ```bash
-GOLANGCI_LINT_VERSION=v1.59.1 make lint
+GOLANGCI_LINT_VERSION=v2.8.0 make lint
 ```
 
 ---
@@ -64,23 +64,18 @@ GOLANGCI_LINT_VERSION=v1.59.1 make lint
 | `run-lint.sh` | **Recommended**: One-command lint runner (install + config + run) |
 | `install-golangci-lint.sh` | Installation script with Go version detection |
 | `golangci-lint-version.sh` | Version mapping documentation |
-| `golangci-v1.yml` | Default config for golangci-lint v1.x |
 | `golangci-v2.yml` | Default config for golangci-lint v2.x |
 
 ---
 
 ## Go Version Compatibility
 
-The script reads the Go version from `go.mod` and selects the correct golangci-lint version accordingly (falls back to system Go version if no `go.mod` is found):
+The script reads the Go version from `go.mod` and selects the correct golangci-lint v2 version accordingly (falls back to system Go version if no `go.mod` is found). All projects require Go 1.23+.
 
 | Go Version | golangci-lint Version | Config File |
 |------------|----------------------|-------------|
 | Go 1.24+ | v2.8.0 | `golangci-v2.yml` |
 | Go 1.23 | v2.3.1 | `golangci-v2.yml` |
-| Go 1.21, 1.22 | v1.64.8 | `golangci-v1.yml` |
-| Go 1.20 or earlier | v1.55.2 | `golangci-v1.yml` |
-
-**Important**: golangci-lint must be built with a Go version >= your project's Go version. Using the official pre-compiled binaries (which this script does) ensures compatibility.
 
 ---
 
@@ -166,7 +161,7 @@ However, for multi-repo teams with varying Go versions, the shared script approa
 
 ### 1. Go Version Mismatch Error
 
-**Error**: `the Go language version (go1.22) used to build golangci-lint is lower than the targeted Go version (1.23.1)`
+**Error**: `the Go language version used to build golangci-lint is lower than the targeted Go version`
 
 **Solution**: This script automatically selects a compatible version. If you see this error, update the version mapping or use the environment variable override.
 
@@ -174,7 +169,7 @@ However, for multi-repo teams with varying Go versions, the shared script approa
 
 **Error**: `unsupported version of the configuration`
 
-**Solution**: You're using a v1 config with golangci-lint v2 (or vice versa). Run `golangci-lint migrate` to convert your config, or use the correct config file for your version.
+**Solution**: You're using a v1 config with golangci-lint v2. Run `golangci-lint migrate` to convert your config to v2 format.
 
 ### 3. Network Issues
 
