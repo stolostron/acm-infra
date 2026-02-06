@@ -213,3 +213,66 @@ else
     echo "Installation verification failed. Expected ${GOLANGCI_LINT_VERSION}, got ${FINAL_VERSION}"
     exit 1
 fi
+
+###############################################################################
+# Auto-download configuration file
+#
+# Downloads the appropriate golangci-lint config file based on major version.
+# The config file is placed in the project root as .golangci.yml so that
+# golangci-lint can find it automatically without -c flag.
+###############################################################################
+
+# Determine config file URL based on golangci-lint major version
+CONFIG_BASE_URL="https://raw.githubusercontent.com/stolostron/acm-infra/main/scripts/lint"
+
+# Check major version (v1.x.x or v2.x.x)
+MAJOR_VERSION="${GOLANGCI_LINT_VERSION%%.*}"
+MAJOR_VERSION="${MAJOR_VERSION#v}"
+
+if [[ "${MAJOR_VERSION}" -ge 2 ]]; then
+    CONFIG_FILE="golangci-v2.yml"
+else
+    CONFIG_FILE="golangci-v1.yml"
+fi
+
+CONFIG_URL="${CONFIG_BASE_URL}/${CONFIG_FILE}"
+LOCAL_CONFIG=".golangci.yml"
+
+# Download config file if not exists or if user wants to update
+download_config() {
+    echo "Downloading golangci-lint config for v${MAJOR_VERSION}.x..."
+    if curl -sfL "${CONFIG_URL}" -o "${LOCAL_CONFIG}"; then
+        echo "Configuration saved to ${LOCAL_CONFIG}"
+        return 0
+    else
+        echo "Warning: Failed to download config from ${CONFIG_URL}"
+        echo "You may need to create ${LOCAL_CONFIG} manually or use -c flag"
+        return 1
+    fi
+}
+
+# Check if config already exists
+if [[ -f "${LOCAL_CONFIG}" ]]; then
+    # Check if existing config matches the required major version
+    if grep -q "^version: \"2\"" "${LOCAL_CONFIG}" 2>/dev/null; then
+        EXISTING_VERSION=2
+    else
+        EXISTING_VERSION=1
+    fi
+
+    if [[ "${EXISTING_VERSION}" -eq "${MAJOR_VERSION}" ]]; then
+        echo "Configuration ${LOCAL_CONFIG} already exists and matches v${MAJOR_VERSION}.x"
+    else
+        echo "Warning: Existing ${LOCAL_CONFIG} is for v${EXISTING_VERSION}.x but golangci-lint v${MAJOR_VERSION}.x is installed"
+        if [[ "${GOLANGCI_UPDATE_CONFIG:-}" == "true" ]]; then
+            download_config
+        else
+            echo "Set GOLANGCI_UPDATE_CONFIG=true to auto-update the config file"
+        fi
+    fi
+else
+    download_config
+fi
+
+echo ""
+echo "Setup complete! You can now run: golangci-lint run"

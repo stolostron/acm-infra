@@ -11,8 +11,7 @@ Add this to your `Makefile`:
 ```makefile
 .PHONY: lint
 lint: install-golangci-lint
-	@# Use golangci-v1.yml for golangci-lint v1.x, golangci-v2.yml for v2.x
-	golangci-lint run -c build/golangci-v1.yml
+	golangci-lint run
 
 .PHONY: install-golangci-lint
 install-golangci-lint:
@@ -21,8 +20,10 @@ install-golangci-lint:
 
 That's it! The script will:
 1. Auto-detect your Go version
-2. Select a compatible golangci-lint version
-3. Download and install it (if not already installed)
+2. Select and install a compatible golangci-lint version
+3. Auto-download the correct `.golangci.yml` config file to your project root
+
+**No configuration needed** - just run `make lint` and everything works automatically.
 
 ### Override Version (Optional)
 
