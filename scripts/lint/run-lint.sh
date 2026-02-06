@@ -21,8 +21,9 @@ set -e
 SCRIPT_URL="https://raw.githubusercontent.com/stolostron/acm-infra/main/scripts/lint"
 CONFIG_CACHE_DIR="${GOLANGCI_CONFIG_DIR:-/tmp/golangci-lint-config}"
 
-# Global variables set by detect_versions
+# Global variables set by detect_versions / install_lint
 LINT_VERSION=""
+LINT_BIN=""
 CONFIG_FILE=""
 CONFIG_PATH=""
 
@@ -111,14 +112,18 @@ install_lint() {
         # Check if major version matches and current version is >= target
         if major_version_matches "$current_version" "$LINT_VERSION" && version_gte "$current_version" "$LINT_VERSION"; then
             echo "golangci-lint $current_version already installed (>= $LINT_VERSION)"
+            LINT_BIN="$(command -v golangci-lint)"
             return 0
         fi
         echo "Current version: $current_version, need: $LINT_VERSION or higher"
     fi
 
     echo "Installing golangci-lint $LINT_VERSION..."
+    local install_dir
+    install_dir="$(go env GOPATH)/bin"
     curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | \
-        sh -s -- -b "$(go env GOPATH)/bin" "$LINT_VERSION"
+        sh -s -- -b "$install_dir" "$LINT_VERSION"
+    LINT_BIN="${install_dir}/golangci-lint"
 }
 
 # Step 3: Get config file (local priority, then download)
@@ -150,9 +155,9 @@ get_config() {
 
 # Step 4: Run lint
 run_lint() {
-    echo "Running: golangci-lint run -c $CONFIG_PATH ./..."
+    echo "Running: $LINT_BIN run -c $CONFIG_PATH ./..."
     echo ""
-    golangci-lint run -c "$CONFIG_PATH" ./...
+    "$LINT_BIN" run -c "$CONFIG_PATH" ./...
 }
 
 # Main
