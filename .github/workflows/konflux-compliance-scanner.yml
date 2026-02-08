@@ -2,8 +2,8 @@ name: Konflux Compliance Scanner
 
 on:
   schedule:
-    # Run at 3:00 AM EST (8:00 UTC), every day - 3 hours after retrigger completes
-    - cron: '0 8 * * *'
+    # Run at 8:00 AM EST (13:00 UTC), every Sunday
+    - cron: '0 13 * * 0'
 
   pull_request:
     branches:
