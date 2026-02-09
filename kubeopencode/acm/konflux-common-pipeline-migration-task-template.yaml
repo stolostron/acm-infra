@@ -48,16 +48,24 @@ spec:
 
         Group all migrations by `packageFile` to minimize the number of file edits.
 
-        ### Step 3: Check MIGRATION.md (Optional but Recommended)
-        For each task bundle, you may check if there are breaking changes:
+        ### Step 3: Check MIGRATION.md and Apply Migration Steps
+        For each task bundle, check if there are breaking changes by fetching:
         ```
         https://raw.githubusercontent.com/konflux-ci/build-definitions/main/task/<task-name>/<new-version>/MIGRATION.md
         ```
 
         Extract `<task-name>` from `depName` (e.g., `task-buildah-oci-ta` from `quay.io/konflux-ci/tekton-catalog/task-buildah-oci-ta`).
 
-        - If MIGRATION.md says "no action needed" → proceed with update
-        - If MIGRATION.md has breaking changes → skip this issue, add to skipped list
+        - If MIGRATION.md says "no action needed" → proceed with simple version+digest update
+        - If MIGRATION.md has breaking changes → **read the migration steps carefully and apply ALL described changes** to the pipeline YAML file:
+          * **Remove deprecated parameters**: find and delete the param entries (both the parameter definition and any `value` references) from the task's `params` list in the pipeline YAML
+          * **Remove deprecated results**: find and delete any references to removed results in subsequent tasks (e.g., `$(tasks.<task>.results.<result>)`)
+          * **Rename parameters/results**: if the migration guide says a parameter or result was renamed, update all references accordingly
+          * **Add new required parameters**: if the migration guide specifies new required parameters with default or recommended values, add them to the task's `params` list
+          * **Apply any other changes** described in the migration guide
+          After applying all migration steps, proceed with the version+digest update as normal.
+          Track which migration actions were applied for each task — this information will be included in the PR body.
+        - **Only skip** if the migration steps are truly ambiguous or require information not available to you (e.g., a new required parameter with no documented default value and no way to determine the correct value). Add skipped issues to the skipped list with a reason.
 
         ### Step 4: Create One PR Per Pipeline File
         Due to CI requirements, each pipeline file MUST have its own separate PR.
@@ -104,6 +112,13 @@ spec:
         | <task2> | <currentValue2> → <newValue2> |
         ...
 
+        ## Migration Steps Applied
+        _(Include this section only if breaking changes were handled)_
+        | Task | Migration Action |
+        |------|-----------------|
+        | <task1> | <description of migration actions applied, e.g. "Removed deprecated params: image-url, rebuild, skip-checks. Removed result: build"> |
+        ...
+
         EOF
         )"
 
@@ -126,23 +141,24 @@ spec:
           "$SLACK_WEBHOOK_URL"
         ```
 
-        Where `$PR_LIST` is a newline-separated list of PR URLs, e.g.:
+        Where `$PR_LIST` is a newline-separated list of PR URLs. Mark PRs that include migration steps so reviewers know which ones need closer attention:
         ```
         - common-oci-ta.yaml: https://github.com/stolostron/konflux-build-catalog/pull/123
-        - common-fbc.yaml: https://github.com/stolostron/konflux-build-catalog/pull/124
+        - common.yaml: https://github.com/stolostron/konflux-build-catalog/pull/125 ⚠️ includes migration changes
+        - common-fbc.yaml: https://github.com/stolostron/konflux-build-catalog/pull/124 ⚠️ includes migration changes
         ```
 
         **Partial success (some issues skipped):**
         ```bash
         curl -X POST -H 'Content-type: application/json' \
-          --data '{"text":"<@U01TX25RJ3B> Batch migration completed with some issues skipped.\n\nPRs created: '"$PR_COUNT"'\n'"$PR_LIST"'\n\nProcessed: '"$SUCCESS_COUNT"' issues\nSkipped (breaking changes): '"$SKIPPED_ISSUES"'\n\nPlease handle skipped issues manually."}' \
+          --data '{"text":"<@U01TX25RJ3B> Batch migration completed with some issues skipped.\n\nPRs created: '"$PR_COUNT"'\n'"$PR_LIST"'\n\nProcessed: '"$SUCCESS_COUNT"' issues\nSkipped (unable to auto-migrate): '"$SKIPPED_ISSUES"'\n\nPlease handle skipped issues manually."}' \
           "$SLACK_WEBHOOK_URL"
         ```
 
         **No processable issues:**
         ```bash
         curl -X POST -H 'Content-type: application/json' \
-          --data '{"text":"<@U01TX25RJ3B> Batch migration: All issues have breaking changes and were skipped.\n\nSkipped issues: '"$SKIPPED_ISSUES"'\n\nPlease handle manually."}' \
+          --data '{"text":"<@U01TX25RJ3B> Batch migration: All issues require manual intervention (migration steps too ambiguous for automated handling).\n\nSkipped issues: '"$SKIPPED_ISSUES"'\n\nPlease handle manually."}' \
           "$SLACK_WEBHOOK_URL"
         ```
 
@@ -150,7 +166,7 @@ spec:
         1. Create ONE PR per pipeline file (not one PR for all changes)
         2. Group issues by `packageFile` - all issues for the same file go into one PR
         3. Use the exact `newDigest` value from each issue's JSON - do not compute or fetch digests
-        4. If an issue has breaking changes in MIGRATION.md, skip it and add to the skipped list
+        4. If MIGRATION.md has breaking changes, read the migration guide and apply all described changes to the pipeline YAML (remove deprecated params, remove result references, rename fields, add new params, etc.). Only skip if the migration steps are truly ambiguous or require information not available to you.
         5. Always use "Fixes #xxx" in PR body to auto-close issues
         6. If no issues can be processed, do NOT create any PRs
     - name: konflux-build-catalog
