@@ -1,0 +1,30 @@
+# Get a token for the acm-task-creator service account:
+#   kubectl create token acm-task-creator -n acm
+#
+# Get a token with 1 year expiration:
+#   kubectl create token acm-task-creator -n acm --duration=8760h
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: acm-task-creator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: acm-task-creator-role
+rules:
+  - apiGroups: ["kubeopencode.io"]
+    resources: ["tasks"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: acm-task-creator-binding
+subjects:
+  - kind: ServiceAccount
+    name: acm-task-creator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: acm-task-creator-role
