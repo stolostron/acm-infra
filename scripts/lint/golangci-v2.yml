@@ -78,6 +78,16 @@ linters:
           - govet
           - errcheck
 
+      # Exclude e2e test files (cleanup code intentionally ignores errors)
+      - path: ^e2e/
+        linters:
+          - errcheck
+
+      # Exclude generated files
+      - path: zz_generated\.deepcopy\.go
+        linters:
+          - all
+
 # Formatters are separate from linters in v2
 formatters:
   enable:
