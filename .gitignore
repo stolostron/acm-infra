@@ -2,4 +2,22 @@
 .github/instructions/snyk_rules.instructions.md
 
 # Secrets
-kubeopencode/
+*.key
+*.pem
+*.crt
+*.cert
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.env
+.env.*
+*.secret
+secrets/
+credentials/
+kubeconfig
+kubeconfig.*
+*-secret.yaml
+*-secret.json
+*secrets.yaml
+*secrets.json
