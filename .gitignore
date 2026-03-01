@@ -1,0 +1,5 @@
+# Snyk rules
+.github/instructions/snyk_rules.instructions.md
+
+# Secrets
+kubeopencode/
