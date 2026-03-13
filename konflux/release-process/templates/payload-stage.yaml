@@ -1,0 +1,13 @@
+apiVersion: appstudio.redhat.com/v1alpha1
+kind: Release
+metadata:
+  name: RELEASE_NAME
+  namespace: NAMESPACE
+  labels:
+    release.appstudio.openshift.io/author: AUTHOR
+spec:
+  snapshot: SNAPSHOT
+  releasePlan: RELEASE_PLAN
+  data:
+    releaseNotes:
+      type: RELEASE_TYPE

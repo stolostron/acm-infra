@@ -1,0 +1,165 @@
+# Query bugs from Jira for a specific application and version
+query-bugs app version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Build the JQL query for bugs
+    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC Cases Counter\" > 0)"
+
+    # Query Jira for bugs
+    jira_output=$(jira issue list -q "$jql_query" --raw)
+
+    # Extract and sort bug keys
+    echo "$jira_output" | jq '[.[].key] | sort | unique' | yq -p=json
+
+# Query CVEs from Jira for a specific application and version
+query-cves app version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Create suffix (e.g., "2.13.5" -> "213")
+    suffix=$(echo "{{version}}" | cut -d. -f1,2 | tr -d '.')
+
+    # Fetch component registry to temp file
+    registry_file=$(mktemp)
+    trap "rm -f $registry_file" EXIT
+    curl -s "https://raw.githubusercontent.com/stolostron/acm-config/refs/heads/main/product/component-registry.yaml" > "$registry_file"
+
+    # Build the JQL query
+    jql_query="project = \"Red Hat Advanced Cluster Management\" and issuetype in (Weakness, Vulnerability) and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog)"
+
+    # Query Jira for CVEs
+    jira_output=$(jira issue list -q "$jql_query" --raw)
+
+    # Load component registry
+    registry=$(yq -o=json "$registry_file")
+
+    # Process with jq - using component registry
+    echo "$jira_output" | jq -s --argjson registry "$registry" --arg suffix "$suffix" '
+        # Get jira data as array
+        .[0] as $jira |
+
+        # Build lookup table: prodseccomponent -> konflux_component
+        ($registry.components | map({(.prodseccomponent): .konflux_component}) | add) as $lookup |
+
+        # Process jira issues
+        $jira | map({
+            # Extract CVE ID from summary
+            key: (.fields.summary | capture("(?<cve>CVE-[0-9]+-[0-9]+)").cve),
+
+            # TODO: Check if pscomponent is in .fields.labels[] instead of summary
+            # See: installer-dev-tools/scripts/konflux/update-advisory.py:163-168
+            # If it is, use: (.fields.labels[] | select(startswith("pscomponent:")))
+            # Extract image reference from summary (e.g., "rhacm2/console-rhel9" or "multicluster-engine/console-rhel9")
+            image: (.fields.summary | capture("(?<img>(rhacm2|multicluster-engine)/[^-]+(-[^-]+)*-rhel[89])").img)
+        }) |
+
+        # Build prodseccomponent string and lookup
+        map(.component = ($lookup["pscomponent:" + .image] + "-{{app}}-" + $suffix)) |
+
+        # Select only key and component
+        map({key, component}) |
+
+        # Get unique entries
+        unique
+    ' | yq -p=json
+
+# Generate a payload YAML (outputs to stdout)
+generate-payload type app version snapshot rc="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Validate type
+    if [[ "{{type}}" != "stage" && "{{type}}" != "prod" ]]; then
+        echo "Error: type must be 'stage' or 'prod'" >&2
+        exit 1
+    fi
+
+    # Validate app
+    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
+        echo "Error: app must be 'acm' or 'mce'" >&2
+        exit 1
+    fi
+
+    # Validate rc for stage
+    if [[ "{{type}}" == "stage" && -z "{{rc}}" ]]; then
+        echo "Error: rc parameter is required for stage releases" >&2
+        exit 1
+    fi
+
+    # Parse version
+    major=$(echo "{{version}}" | cut -d. -f1)
+    minor=$(echo "{{version}}" | cut -d. -f2)
+    patch=$(echo "{{version}}" | cut -d. -f3)
+    short_version="${major}${minor}"
+
+    # Set namespace
+    namespace="crt-redhat-{{app}}-tenant"
+
+    # Get author from git config
+    author=$(git config user.name || echo "unknown")
+
+    # Build metadata
+    if [ "{{type}}" = "stage" ]; then
+        release_name="stage-publish-{{app}}-${short_version}-z${patch}-rc{{rc}}-1"
+        release_plan="stage-publish-{{app}}-${short_version}"
+    else
+        release_name="prod-publish-{{app}}-${short_version}-z${patch}-1"
+        release_plan="prod-publish-{{app}}-${short_version}"
+    fi
+
+    echo "Querying Jira for bugs and CVEs..." >&2
+
+    # Query bugs and CVEs (capture as temp files to avoid shell issues)
+    bugs_file=$(mktemp)
+    cves_file=$(mktemp)
+    trap "rm -f $bugs_file $cves_file" EXIT
+
+    just query-bugs {{app}} {{version}} > "$bugs_file"
+    just query-cves {{app}} {{version}} > "$cves_file"
+
+    # Determine release type based on CVEs
+    cve_count=$(yq 'length' "$cves_file")
+    bug_count=$(yq 'length' "$bugs_file")
+
+    if [ "$cve_count" -gt 0 ]; then
+        release_type="RHSA"
+    elif [ "$bug_count" -gt 0 ]; then
+        release_type="RHBA"
+    else
+        release_type="RHEA"
+    fi
+
+    echo "Generating payload YAML..." >&2
+    echo "  Release type: $release_type" >&2
+    echo "  Bugs: $bug_count" >&2
+    echo "  CVEs: $cve_count" >&2
+
+    # Start with template and inject values
+    output=$(yq eval ".metadata.name = \"$release_name\" |
+        .metadata.namespace = \"$namespace\" |
+        .metadata.labels[\"release.appstudio.openshift.io/author\"] = \"$author\" |
+        .spec.snapshot = \"{{snapshot}}\" |
+        .spec.releasePlan = \"$release_plan\" |
+        .spec.data.releaseNotes.type = \"$release_type\"" \
+        templates/payload-stage.yaml)
+
+    # Add references for ACM RHSA
+    if [[ "{{app}}" == "acm" && "$release_type" == "RHSA" ]]; then
+        output=$(echo "$output" | yq eval '.spec.data.releaseNotes.references = ["https://access.redhat.com/security/updates/classification/#important"]')
+    fi
+
+    # Add bugs if any
+    if [ "$bug_count" -gt 0 ]; then
+        # Convert bug list to issues format
+        bugs_formatted=$(yq eval '[.[] | {"id": ., "source": "issues.redhat.com"}]' "$bugs_file")
+        output=$(echo "$output" | yq eval ".spec.data.releaseNotes.issues.fixed = $bugs_formatted")
+    fi
+
+    # Add CVEs if any
+    if [ "$cve_count" -gt 0 ]; then
+        output=$(echo "$output" | yq eval ".spec.data.releaseNotes.cves = load(\"$cves_file\")")
+    fi
+
+    # Output to stdout
+    echo "$output"
