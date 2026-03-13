@@ -64,28 +64,43 @@ query-cves app version:
         unique
     ' | yq -p=json
 
-# Generate a payload YAML (outputs to stdout)
-generate-payload type app version snapshot rc="":
+# Private: validate common inputs
+_validate type app rc:
     #!/usr/bin/env bash
     set -euo pipefail
-
-    # Validate type
     if [[ "{{type}}" != "stage" && "{{type}}" != "prod" ]]; then
         echo "Error: type must be 'stage' or 'prod'" >&2
         exit 1
     fi
-
-    # Validate app
     if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
         echo "Error: app must be 'acm' or 'mce'" >&2
         exit 1
     fi
-
-    # Validate rc for stage
     if [[ "{{type}}" == "stage" && -z "{{rc}}" ]]; then
         echo "Error: rc parameter is required for stage releases" >&2
         exit 1
     fi
+
+# Private: build base release YAML from template
+_build_base app snapshot release_name release_plan release_type:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    namespace="crt-redhat-{{app}}-tenant"
+    author=$(git config user.name || echo "unknown")
+
+    yq eval ".metadata.name = \"{{release_name}}\" |
+        .metadata.namespace = \"$namespace\" |
+        .metadata.labels[\"release.appstudio.openshift.io/author\"] = \"$author\" |
+        .spec.snapshot = \"{{snapshot}}\" |
+        .spec.releasePlan = \"{{release_plan}}\" |
+        .spec.data.releaseNotes.type = \"{{release_type}}\"" \
+        templates/release.yaml
+
+# Generate a payload YAML (outputs to stdout)
+generate-payload type app version snapshot rc="": (_validate type app rc)
+    #!/usr/bin/env bash
+    set -euo pipefail
 
     # Parse version
     major=$(echo "{{version}}" | cut -d. -f1)
@@ -93,24 +108,18 @@ generate-payload type app version snapshot rc="":
     patch=$(echo "{{version}}" | cut -d. -f3)
     short_version="${major}${minor}"
 
-    # Set namespace
-    namespace="crt-redhat-{{app}}-tenant"
-
-    # Get author from git config
-    author=$(git config user.name || echo "unknown")
-
     # Build metadata
     if [ "{{type}}" = "stage" ]; then
-        release_name="stage-publish-{{app}}-${short_version}-z${patch}-rc{{rc}}-1"
+        release_name="stage-publish-{{app}}-${short_version}-z${patch}-rc{{rc}}"
         release_plan="stage-publish-{{app}}-${short_version}"
     else
-        release_name="prod-publish-{{app}}-${short_version}-z${patch}-1"
+        release_name="prod-publish-{{app}}-${short_version}-z${patch}"
         release_plan="prod-publish-{{app}}-${short_version}"
     fi
 
     echo "Querying Jira for bugs and CVEs..." >&2
 
-    # Query bugs and CVEs (capture as temp files to avoid shell issues)
+    # Query bugs and CVEs
     bugs_file=$(mktemp)
     cves_file=$(mktemp)
     trap "rm -f $bugs_file $cves_file" EXIT
@@ -135,14 +144,8 @@ generate-payload type app version snapshot rc="":
     echo "  Bugs: $bug_count" >&2
     echo "  CVEs: $cve_count" >&2
 
-    # Start with template and inject values
-    output=$(yq eval ".metadata.name = \"$release_name\" |
-        .metadata.namespace = \"$namespace\" |
-        .metadata.labels[\"release.appstudio.openshift.io/author\"] = \"$author\" |
-        .spec.snapshot = \"{{snapshot}}\" |
-        .spec.releasePlan = \"$release_plan\" |
-        .spec.data.releaseNotes.type = \"$release_type\"" \
-        templates/payload-stage.yaml)
+    # Build base YAML
+    output=$(just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "$release_type")
 
     # Add references for ACM RHSA
     if [[ "{{app}}" == "acm" && "$release_type" == "RHSA" ]]; then
@@ -151,7 +154,6 @@ generate-payload type app version snapshot rc="":
 
     # Add bugs if any
     if [ "$bug_count" -gt 0 ]; then
-        # Convert bug list to issues format
         bugs_formatted=$(yq eval '[.[] | {"id": ., "source": "issues.redhat.com"}]' "$bugs_file")
         output=$(echo "$output" | yq eval ".spec.data.releaseNotes.issues.fixed = $bugs_formatted")
     fi
@@ -161,5 +163,61 @@ generate-payload type app version snapshot rc="":
         output=$(echo "$output" | yq eval ".spec.data.releaseNotes.cves = load(\"$cves_file\")")
     fi
 
-    # Output to stdout
     echo "$output"
+
+# Generate a catalog YAML (outputs to stdout)
+generate-catalog type app version snapshot rc="": (_validate type app rc)
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Parse version
+    major=$(echo "{{version}}" | cut -d. -f1)
+    minor=$(echo "{{version}}" | cut -d. -f2)
+    patch=$(echo "{{version}}" | cut -d. -f3)
+    short_version="${major}${minor}"
+
+    # Build metadata
+    if [ "{{type}}" = "stage" ]; then
+        release_name="stage-publish-catalog-{{app}}-${short_version}-z${patch}-rc{{rc}}"
+        release_plan="{{app}}-release-plan-stage"
+    else
+        release_name="prod-publish-catalog-{{app}}-${short_version}-z${patch}"
+        release_plan="{{app}}-release-plan-prod"
+    fi
+
+    echo "Generating catalog YAML..." >&2
+
+    # Build base YAML (catalog is always RHEA)
+    output=$(just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHEA")
+
+    # Add references for ACM
+    if [[ "{{app}}" == "acm" ]]; then
+        output=$(echo "$output" | yq eval '.spec.data.releaseNotes.references = ["https://access.redhat.com/security/updates/classification/#important"]')
+    fi
+
+    echo "$output"
+
+# Generate a bundle YAML (outputs to stdout)
+generate-bundle type app version snapshot rc="": (_validate type app rc)
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Parse version
+    major=$(echo "{{version}}" | cut -d. -f1)
+    minor=$(echo "{{version}}" | cut -d. -f2)
+    patch=$(echo "{{version}}" | cut -d. -f3)
+    short_version="${major}${minor}"
+
+    # Build metadata
+    if [ "{{type}}" = "stage" ]; then
+        release_name="stage-publish-bundle-{{app}}-${short_version}-z${patch}-rc{{rc}}"
+        release_plan="stage-publish-bundle-{{app}}-${short_version}"
+    else
+        release_name="prod-publish-bundle-{{app}}-${short_version}-z${patch}"
+        release_plan="prod-publish-bundle-{{app}}-${short_version}"
+    fi
+
+    echo "Generating bundle YAML..." >&2
+
+    # Build base YAML (bundle is always RHBA)
+    just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHBA"
