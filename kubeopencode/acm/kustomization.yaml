@@ -4,13 +4,6 @@ namespace: acm
 resources:
   - namespace.yaml
   - serviceaccount.yaml
-  - acm-fast-agent.yaml
-  - acm-default-agent.yaml
-  - hive-api-upgrade-targets-configmap.yaml
-  - hive-api-upgrade-task-template.yaml
-  - hive-api-upgrade-cronjob.yaml
-  - hive-api-patch-targets-configmap.yaml
-  - hive-api-patch-task-template.yaml
-  - hive-api-patch-cronjob.yaml
+  - agent.yaml
   - acm-task-creator-sa.yaml
   - secrets.yaml

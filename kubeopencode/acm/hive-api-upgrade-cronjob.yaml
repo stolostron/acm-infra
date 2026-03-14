@@ -78,10 +78,10 @@ spec:
                       batch.kubeopencode.io/target-repo: "$REPO"
                       batch.kubeopencode.io/target-branch: "$BRANCH"
                   spec:
-                    taskTemplateRef:
-                      name: hive-api-upgrade-task-template
+                    agentRef:
+                      name: acm
                     description: |
-                      Upgrade Hive API to the latest version.
+                      Use the skill from skills/hive-api-upgrade.md to upgrade Hive API.
                       Target repo: $ORG/$REPO
                       Target branch: $BRANCH
                     contexts:

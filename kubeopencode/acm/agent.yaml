@@ -1,10 +1,12 @@
 # Copyright Contributors to the KubeOpenCode project
-# Agent configuration for AI agent with credentials
+# Single agent for ACM tasks using "repo as agent" pattern
+# Skills are loaded dynamically from the .claude/skills/ directory
 apiVersion: kubeopencode.io/v1alpha1
 kind: Agent
 metadata:
-  name: default
+  name: acm
 spec:
+  profile: "ACM agent for general ACM maintenance tasks"
   agentImage: quay.io/kubeopencode/kubeopencode-agent-opencode:latest
   executorImage: quay.io/kubeopencode/kubeopencode-agent-devbox:latest
   workspaceDir: /workspace
@@ -16,7 +18,12 @@ spec:
       "model": "google/gemini-3-pro-preview",
       "small_model": "google/gemini-3-flash-preview",
       "share": "disabled",
-      "autoupdate": false
+      "autoupdate": false,
+      "agent": {
+        "general": {
+          "model": "google/gemini-3-flash-preview"
+        }
+      }
     }
   contexts:
     - name: basic-rules
@@ -24,6 +31,7 @@ spec:
       text: |
         ## Agent Behavior Rules
         1. Always sign-off commits with `--signoff` flag.
+        2. Read available skills from the skills/ directory for task-specific workflows.
   credentials:
     # Mount entire secret - all keys become env vars automatically
     - name: git
@@ -38,6 +46,7 @@ spec:
     - name: github-app
       secretRef:
         name: github-bot-credentials
+    # Currently this slack webhook URL points to #acmqe-serverfoundation-auto-notify.
     - name: slack
       secretRef:
         name: slack-webhook-url
