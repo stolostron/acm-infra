@@ -38,7 +38,7 @@ readonly STATUS_SKIPPED_CEL_EC="Skipped (CEL)"
 readonly JIRA_ACTIVITY_TYPE="Quality / Stability / Reliability"
 readonly JIRA_SEVERITY="Critical"
 readonly DEFAULT_LABELS="konflux,compliance,auto-created"
-readonly DEFAULT_JIRA_SERVER="https://issues.redhat.com"
+readonly DEFAULT_JIRA_SERVER="https://redhat.atlassian.net"
 
 # CSV field requirements
 readonly MIN_CSV_FIELDS=9
@@ -1238,16 +1238,16 @@ when you run it with the required environment variables set."
 
 Please set the following environment variables:
   export JIRA_API_TOKEN=\"your-personal-access-token\"
-  export JIRA_AUTH_TYPE=\"bearer\"
+  export JIRA_AUTH_TYPE=\"basic\"
 
 Or run 'jira init' manually to configure interactively."
         fi
 
         # Set defaults for jira init
         JIRA_SERVER="${JIRA_SERVER:-$DEFAULT_JIRA_SERVER}"
-        JIRA_INSTALLATION="${JIRA_INSTALLATION:-Local}"
+        JIRA_INSTALLATION="${JIRA_INSTALLATION:-Cloud}"
         JIRA_LOGIN="${JIRA_LOGIN:-${JIRA_USER:-}}"
-        JIRA_AUTH_TYPE="${JIRA_AUTH_TYPE:-bearer}"
+        JIRA_AUTH_TYPE="${JIRA_AUTH_TYPE:-basic}"
         JIRA_BOARD="${JIRA_BOARD:-None}"
 
         info "Initializing jira-cli with:"
@@ -1344,12 +1344,12 @@ ENVIRONMENT VARIABLES:
     Required (for automatic jira-cli initialization):
         JIRA_USER            Your JIRA username/email (e.g., user@redhat.com)
         JIRA_API_TOKEN       Your JIRA Personal Access Token
-        JIRA_AUTH_TYPE       Authentication type (set to "bearer" for PAT)
+        JIRA_AUTH_TYPE       Authentication type (set to "basic" for Jira Cloud)
 
     Optional:
         JIRA_PROJECT         JIRA project key (default: "ACM")
-        JIRA_SERVER          JIRA server URL (default: "https://issues.redhat.com")
-        JIRA_INSTALLATION    Installation type: "Cloud" or "Local" (default: "Local")
+        JIRA_SERVER          JIRA server URL (default: "https://redhat.atlassian.net")
+        JIRA_INSTALLATION    Installation type: "Cloud" or "Local" (default: "Cloud")
 
 PREREQUISITES:
     This script requires jira-cli (https://github.com/ankitpokhrel/jira-cli)

@@ -27,7 +27,7 @@ Value: eyJhbGciOiJSUzI1NiIsImtpZCI6Ij...
 Name: JIRA_API_TOKEN
 Value: YOUR_JIRA_PERSONAL_ACCESS_TOKEN
 ```
-(Create at https://issues.redhat.com → User Settings → Personal Access Tokens)
+(Create at https://id.atlassian.com/manage-profile/security/api-tokens)
 
 #### Secret 4: JIRA_USER
 ```
@@ -159,7 +159,7 @@ After the workflow completes:
    - Extract and check the CSV and log files
 
 3. **Check JIRA**:
-   - Go to https://issues.redhat.com
+   - Go to https://redhat.atlassian.net
    - Search: `labels = konflux AND labels = compliance AND labels = auto-created`
    - Verify issues were created for failed components
 
@@ -196,8 +196,8 @@ kubectl --server=https://YOUR_KONFLUX_ENDPOINT:6443 \
 **Solution**: Verify JIRA token
 ```bash
 # Test JIRA API
-curl -H "Authorization: Bearer YOUR_JIRA_TOKEN" \
-  https://issues.redhat.com/rest/api/2/myself
+curl -u "your-email@redhat.com:YOUR_JIRA_API_TOKEN" \
+  https://redhat.atlassian.net/rest/api/2/myself
 ```
 
 ### Issue: "No compliance data found"

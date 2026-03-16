@@ -32,10 +32,10 @@ on:
         required: false
 
 env:
-  JIRA_SERVER: "https://issues.redhat.com"
+  JIRA_SERVER: "https://redhat.atlassian.net"
   JIRA_PROJECT: "ACM"
-  JIRA_AUTH_TYPE: "bearer"
-  JIRA_INSTALLATION: "Local"
+  JIRA_AUTH_TYPE: "basic"
+  JIRA_INSTALLATION: "Cloud"
   JIRA_BOARD: "None"
   JIRA_PRIORITY: "Critical"
   JIRA_LABELS: "konflux,compliance,auto-created"
@@ -873,8 +873,8 @@ jobs:
               JIRA_UPDATED=$((JIRA_UPDATED + updated))
               JIRA_CLOSED=$((JIRA_CLOSED + closed))
 
-              # Extract JIRA issue keys from URLs like https://issues.redhat.com/browse/ACM-27481
-              # The log contains lines like: • component: https://issues.redhat.com/browse/ACM-27481
+              # Extract JIRA issue keys from URLs like https://redhat.atlassian.net/browse/ACM-27481
+              # The log contains lines like: • component: https://redhat.atlassian.net/browse/ACM-27481
               grep -oE 'ACM-[0-9]+' "$jira_log" 2>/dev/null | sort -u >> /tmp/aggregate/jira_issues.txt || true
             fi
           done
@@ -965,7 +965,7 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             sort -u /tmp/aggregate/jira_issues.txt | while read -r issue_key; do
               if [[ -n "$issue_key" ]]; then
-                echo "- [$issue_key](https://issues.redhat.com/browse/$issue_key)" >> $GITHUB_STEP_SUMMARY
+                echo "- [$issue_key](https://redhat.atlassian.net/browse/$issue_key)" >> $GITHUB_STEP_SUMMARY
               fi
             done
             echo "" >> $GITHUB_STEP_SUMMARY

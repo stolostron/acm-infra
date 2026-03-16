@@ -57,7 +57,7 @@ You can manually trigger the workflow:
 After the workflow completes:
 1. Go to **Actions** → select the workflow run
 2. Download artifacts: `compliance-results-acm-215`, `compliance-results-mce-29`
-3. Check JIRA: https://issues.redhat.com (search for labels: `konflux`, `compliance`, `auto-created`)
+3. Check JIRA: https://redhat.atlassian.net (search for labels: `konflux`, `compliance`, `auto-created`)
 
 ## Performance Optimization
 
@@ -285,10 +285,9 @@ The workflow uses the automatic `GITHUB_TOKEN` provided by GitHub Actions. No ad
 ### Required: JIRA Token
 
 Create a JIRA Personal Access Token:
-1. Go to https://issues.redhat.com
-2. User Settings → Personal Access Tokens
-3. Create new token with appropriate permissions
-4. Save the token and add it as a GitHub secret
+1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
+2. Create new API token
+3. Save the token and add it as a GitHub secret
 
 ## Troubleshooting
 
@@ -316,8 +315,8 @@ kubectl --server=https://your-konflux-endpoint:6443 \
 **JIRA API:**
 ```bash
 # Test JIRA connection
-curl -H "Authorization: Bearer $JIRA_API_TOKEN" \
-  https://issues.redhat.com/rest/api/2/myself
+curl -u "$JIRA_USER:$JIRA_API_TOKEN" \
+  https://redhat.atlassian.net/rest/api/2/myself
 ```
 
 ### View Workflow Logs
