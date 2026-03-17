@@ -81,7 +81,7 @@ The workflows now use GitHub Actions caching to significantly reduce tool downlo
 - `kubectl` v1.31.0 (~45MB)
 - `oc` (OpenShift CLI) v4.17.8 (~75MB)
 - `yq` v4.44.3 (~4MB)
-- `jira-cli` v1.5.2 (~15MB)
+- `jira-cli` v1.7.0 (~15MB)
 - Total cache size: ~140MB (well within 10GB repository limit)
 
 **Note:** `skopeo` continues to be installed via apt-get (not cached due to system dependencies)
@@ -93,7 +93,7 @@ env:
   KUBECTL_VERSION: "1.31.0"  # Update version here
   OC_VERSION: "4.17.8"
   YQ_VERSION: "4.44.3"
-  JIRA_CLI_VERSION: "1.5.2"
+  JIRA_CLI_VERSION: "1.7.0"
   CACHE_VERSION: "v1"        # Bump to force cache refresh
 ```
 
