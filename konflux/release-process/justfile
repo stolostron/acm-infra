@@ -23,7 +23,7 @@ query-cves app version:
     # Fetch component registry to temp file
     registry_file=$(mktemp)
     trap "rm -f $registry_file" EXIT
-    curl -s "https://raw.githubusercontent.com/stolostron/acm-config/refs/heads/main/product/component-registry.yaml" > "$registry_file"
+    gh api repos/ngraham20/acm-config/contents/product/component-registry.yaml?ref=updated-component-registry --jq '.content' | base64 -d > "$registry_file"
 
     # Build the JQL query
     jql_query="project = \"Red Hat Advanced Cluster Management\" and issuetype in (Weakness, Vulnerability) and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog)"
@@ -39,23 +39,28 @@ query-cves app version:
         # Get jira data as array
         .[0] as $jira |
 
-        # Build lookup table: prodseccomponent -> konflux_component
-        ($registry.components | map({(.prodseccomponent): .konflux_component}) | add) as $lookup |
+        # Build lookup table: prodseccomponent -> konflux_component (skip nulls)
+        ($registry.components | map(select(.prodseccomponent != null)) | map({(.prodseccomponent): .konflux_component}) | add) as $lookup |
 
         # Process jira issues
         $jira | map({
-            # Extract CVE ID from summary
-            key: (.fields.summary | capture("(?<cve>CVE-[0-9]+-[0-9]+)").cve),
+            # Extract CVE ID from labels
+            key: (.fields.labels[] | select(test("^CVE-[0-9]+-[0-9]+$"))),
 
-            # TODO: Check if pscomponent is in .fields.labels[] instead of summary
-            # See: installer-dev-tools/scripts/konflux/update-advisory.py:163-168
-            # If it is, use: (.fields.labels[] | select(startswith("pscomponent:")))
-            # Extract image reference from summary (e.g., "rhacm2/console-rhel9" or "multicluster-engine/console-rhel9")
-            image: (.fields.summary | capture("(?<img>(rhacm2|multicluster-engine)/[^-]+(-[^-]+)*-rhel[89])").img)
+            # Extract pscomponent from labels
+            prodseccomponent: (.fields.labels[] | select(startswith("pscomponent:")))
         }) |
 
-        # Build prodseccomponent string and lookup
-        map(.component = ($lookup["pscomponent:" + .image] + "-{{app}}-" + $suffix)) |
+        # Lookup konflux component and build component name
+        map(
+            .component = (
+                $lookup[.prodseccomponent] //
+                (
+                    "⚠️  Missing mapping for: " + .prodseccomponent + " (CVE: " + .key + ")" | debug |
+                    "UNKNOWN"
+                )
+            ) + "-{{app}}-" + $suffix
+        ) |
 
         # Select only key and component
         map({key, component}) |
