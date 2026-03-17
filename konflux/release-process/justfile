@@ -2,12 +2,20 @@
 debug := "false"
 
 # Query bugs from Jira for a specific application and version
-query-bugs app version:
+# bundle: "true" (bundle-bugs only), "false" (exclude bundle-bugs)
+query-bugs app version bundle:
     #!/usr/bin/env bash
     set -euo pipefail
 
+    # Build bundle filter clause
+    if [ "{{bundle}}" = "true" ]; then
+        bundle_clause=" and labels = \"bundle-bug\""
+    else
+        bundle_clause=" and labels != \"bundle-bug\""
+    fi
+
     # Build the JQL query for bugs
-    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC_Cases_Counter\" > 0)"
+    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC_Cases_Counter\" > 0)${bundle_clause}"
 
     # Query Jira for bugs
     jira_output=$(jira issue list -q "$jql_query" --raw 2>&1) || {
@@ -110,9 +118,20 @@ _build_base app snapshot release_name release_plan release_type:
     #!/usr/bin/env bash
     set -euo pipefail
 
+    if [[ "{{debug}}" == "true" ]]; then
+        echo "[_build_base] Starting..." >&2
+        echo "[_build_base] app={{app}}, snapshot={{snapshot}}" >&2
+        echo "[_build_base] release_name={{release_name}}, release_plan={{release_plan}}, release_type={{release_type}}" >&2
+    fi
+
     namespace="crt-redhat-{{app}}-tenant"
+    [[ "{{debug}}" == "true" ]] && echo "[_build_base] namespace=$namespace" >&2 || true
+
     author=$(git config user.email | cut -d'@' -f1)
     author=${author:-unknown}
+    [[ "{{debug}}" == "true" ]] && echo "[_build_base] author=$author" >&2 || true
+
+    [[ "{{debug}}" == "true" ]] && echo "[_build_base] Running yq eval..." >&2 || true
 
     yq eval ".metadata.name = \"{{release_name}}\" |
         .metadata.namespace = \"$namespace\" |
@@ -120,7 +139,12 @@ _build_base app snapshot release_name release_plan release_type:
         .spec.snapshot = \"{{snapshot}}\" |
         .spec.releasePlan = \"{{release_plan}}\" |
         .spec.data.releaseNotes.type = \"{{release_type}}\"" \
-        templates/release.yaml
+        templates/release.yaml || {
+        echo "[_build_base] yq eval failed!" >&2
+        exit 1
+    }
+
+    [[ "{{debug}}" == "true" ]] && echo "[_build_base] Complete" >&2 || true
 
 # Generate a payload YAML (outputs to stdout)
 generate-payload type app version snapshot rc="": (_validate type app rc)
@@ -149,7 +173,7 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
     cves_file=$(mktemp)
     trap "rm -f $bugs_file $cves_file" EXIT
 
-    just query-bugs {{app}} {{version}} > "$bugs_file"
+    just query-bugs {{app}} {{version}} false > "$bugs_file"
     just query-cves {{app}} {{version}} > "$cves_file"
 
     # Determine release type based on CVEs
@@ -245,5 +269,19 @@ generate-bundle type app version snapshot rc="": (_validate type app rc)
 
     [[ "{{debug}}" == "true" ]] && echo "Generating bundle YAML..." >&2
 
+    # Query bundle bugs
+    bugs_file=$(mktemp)
+    trap "rm -f $bugs_file" EXIT
+
+    just query-bugs {{app}} {{version}} true > "$bugs_file"
+
     # Build base YAML (bundle is always RHBA)
-    just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHBA"
+    output=$(just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHBA")
+
+    # Add bugs if any
+    bug_count=$(yq 'length' "$bugs_file")
+    if [ "$bug_count" -gt 0 ]; then
+        output=$(echo "$output" | yq eval ".spec.data.releaseNotes.issues.fixed = load(\"$bugs_file\")")
+    fi
+
+    echo "$output"
