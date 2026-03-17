@@ -1,16 +1,19 @@
+# Debug flag (set to "true" to enable debug output)
+debug := "false"
+
 # Query bugs from Jira for a specific application and version
 query-bugs app version:
     #!/usr/bin/env bash
     set -euo pipefail
 
     # Build the JQL query for bugs
-    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC Cases Counter\" > 0)"
+    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC_Cases_Counter\" > 0)"
 
     # Query Jira for bugs
     jira_output=$(jira issue list -q "$jql_query" --raw)
 
-    # Extract and sort bug keys
-    echo "$jira_output" | jq '[.[].key] | sort | unique' | yq -p=json
+    # Extract and format bug keys
+    echo "$jira_output" | jq -r 'map({id: .key, source: "issues.redhat.com"}) | sort_by(.id)' | yq -p=json
 
 # Query CVEs from Jira for a specific application and version
 query-cves app version:
@@ -92,7 +95,8 @@ _build_base app snapshot release_name release_plan release_type:
     set -euo pipefail
 
     namespace="crt-redhat-{{app}}-tenant"
-    author=$(git config user.name || echo "unknown")
+    author=$(git config user.email | cut -d'@' -f1)
+    author=${author:-unknown}
 
     yq eval ".metadata.name = \"{{release_name}}\" |
         .metadata.namespace = \"$namespace\" |
@@ -122,7 +126,7 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
         release_plan="prod-publish-{{app}}-${short_version}"
     fi
 
-    echo "Querying Jira for bugs and CVEs..." >&2
+    [[ "{{debug}}" == "true" ]] && echo "Querying Jira for bugs and CVEs..." >&2
 
     # Query bugs and CVEs
     bugs_file=$(mktemp)
@@ -144,10 +148,12 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
         release_type="RHEA"
     fi
 
-    echo "Generating payload YAML..." >&2
-    echo "  Release type: $release_type" >&2
-    echo "  Bugs: $bug_count" >&2
-    echo "  CVEs: $cve_count" >&2
+    if [[ "{{debug}}" == "true" ]]; then
+        echo "Generating payload YAML..." >&2
+        echo "  Release type: $release_type" >&2
+        echo "  Bugs: $bug_count" >&2
+        echo "  CVEs: $cve_count" >&2
+    fi
 
     # Build base YAML
     output=$(just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "$release_type")
@@ -159,8 +165,7 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
 
     # Add bugs if any
     if [ "$bug_count" -gt 0 ]; then
-        bugs_formatted=$(yq eval '[.[] | {"id": ., "source": "issues.redhat.com"}]' "$bugs_file")
-        output=$(echo "$output" | yq eval ".spec.data.releaseNotes.issues.fixed = $bugs_formatted")
+        output=$(echo "$output" | yq eval ".spec.data.releaseNotes.issues.fixed = load(\"$bugs_file\")")
     fi
 
     # Add CVEs if any
@@ -190,7 +195,7 @@ generate-catalog type app version snapshot rc="": (_validate type app rc)
         release_plan="{{app}}-release-plan-prod"
     fi
 
-    echo "Generating catalog YAML..." >&2
+    [[ "{{debug}}" == "true" ]] && echo "Generating catalog YAML..." >&2
 
     # Build base YAML (catalog is always RHEA)
     output=$(just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHEA")
@@ -222,7 +227,7 @@ generate-bundle type app version snapshot rc="": (_validate type app rc)
         release_plan="prod-publish-bundle-{{app}}-${short_version}"
     fi
 
-    echo "Generating bundle YAML..." >&2
+    [[ "{{debug}}" == "true" ]] && echo "Generating bundle YAML..." >&2
 
     # Build base YAML (bundle is always RHBA)
     just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHBA"
