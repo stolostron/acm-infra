@@ -10,7 +10,15 @@ query-bugs app version:
     jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC_Cases_Counter\" > 0)"
 
     # Query Jira for bugs
-    jira_output=$(jira issue list -q "$jql_query" --raw)
+    jira_output=$(jira issue list -q "$jql_query" --raw 2>&1) || {
+        # If query failed, check if it's just "no results" or a real error
+        if echo "$jira_output" | grep -q "No result found"; then
+            jira_output="[]"
+        else
+            echo "$jira_output" >&2
+            exit 1
+        fi
+    }
 
     # Extract and format bug keys
     echo "$jira_output" | jq -r 'map({id: .key, source: "issues.redhat.com"}) | sort_by(.id)' | yq -p=json
@@ -32,7 +40,15 @@ query-cves app version:
     jql_query="project = \"Red Hat Advanced Cluster Management\" and issuetype in (Weakness, Vulnerability) and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog)"
 
     # Query Jira for CVEs
-    jira_output=$(jira issue list -q "$jql_query" --raw)
+    jira_output=$(jira issue list -q "$jql_query" --raw 2>&1) || {
+        # If query failed, check if it's just "no results" or a real error
+        if echo "$jira_output" | grep -q "No result found"; then
+            jira_output="[]"
+        else
+            echo "$jira_output" >&2
+            exit 1
+        fi
+    }
 
     # Load component registry
     registry=$(yq -o=json "$registry_file")
