@@ -86,7 +86,7 @@ query-cves app version:
                     "⚠️  Missing mapping for: " + .prodseccomponent + " (CVE: " + .key + ")" | debug |
                     "UNKNOWN"
                 )
-            ) + "-{{app}}-" + $suffix
+            ) + "-" + $suffix
         ) |
 
         # Select only key and component
