@@ -377,6 +377,20 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     # Apply using helper
     just _apply "$bundle" {{skip_confirm}} {{dry_run}}
 
+# Remove cloned release management repo
+cleanup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    repo_dir="acm-release-management"
+
+    if [ -d "$repo_dir" ]; then
+        rm -rf "$repo_dir"
+        echo "✅ Removed $repo_dir"
+    else
+        echo "ℹ️  $repo_dir does not exist"
+    fi
+
 # Clone release management repo and create a branch
 clone-release-mgmt branch_name cert_file="":
     #!/usr/bin/env bash
@@ -405,7 +419,7 @@ clone-release-mgmt branch_name cert_file="":
     echo "✅ Branch {{branch_name}} created from origin/main"
 
 # Release: generate YAML, save to disk, and apply to cluster
-release target type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc)
+release target type app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="": (_validate type app rc)
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -421,9 +435,23 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
     patch=$(echo "{{version}}" | cut -d. -f3)
     short_version="${major}${minor}"
 
+    # If workspace is default, clone the release management repo
+    workspace_dir="{{workspace}}"
+    if [ "$workspace_dir" = "." ]; then
+        # Clone release management repo and create branch
+        app_lower=$(echo "{{app}}" | tr '[:upper:]' '[:lower:]')
+        branch_name="${app_lower}-${major}${minor}-z${patch}"
+        if [ "{{type}}" = "stage" ]; then
+            branch_name="${branch_name}-rc{{rc}}"
+        fi
+
+        just clone-release-mgmt "$branch_name" "{{cert_file}}"
+        workspace_dir="acm-release-management"
+    fi
+
     # Build directory path
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
-    release_dir="{{workspace}}/${app_upper}/${app_upper}-{{version}}"
+    release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
 
     if [ "{{type}}" = "stage" ]; then
         release_dir="${release_dir}/rc{{rc}}"
