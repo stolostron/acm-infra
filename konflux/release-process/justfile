@@ -121,6 +121,32 @@ _validate type app rc:
         exit 1
     fi
 
+# Private: apply YAML to cluster with confirmation
+_apply yaml skip_confirm="false" dry_run="true":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Show the YAML to the user
+    echo "{{yaml}}"
+
+    # Confirm unless skip_confirm is true
+    if [ "{{skip_confirm}}" != "true" ]; then
+        echo "" >&2
+        if [ "{{dry_run}}" = "true" ]; then
+            echo "Press Enter to apply this release (DRY-RUN), or Ctrl+C to cancel..." >&2
+        else
+            echo "Press Enter to apply this release (LIVE), or Ctrl+C to cancel..." >&2
+        fi
+        read -r
+    fi
+
+    # Apply to cluster
+    if [ "{{dry_run}}" = "true" ]; then
+        echo "{{yaml}}" | oc apply --dry-run=server -f -
+    else
+        echo "{{yaml}}" | oc apply -f -
+    fi
+
 # Private: build base release YAML from template
 _build_base app snapshot release_name release_plan release_type:
     #!/usr/bin/env bash
@@ -244,26 +270,8 @@ apply-payload type app version snapshot rc="" skip_confirm="false" dry_run="true
     # Generate the payload
     payload=$(just debug={{debug}} generate-payload {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
 
-    # Show the payload to the user
-    echo "$payload"
-
-    # Confirm unless skip_confirm is true
-    if [ "{{skip_confirm}}" != "true" ]; then
-        echo "" >&2
-        if [ "{{dry_run}}" = "true" ]; then
-            echo "Press Enter to apply this release (DRY-RUN), or Ctrl+C to cancel..." >&2
-        else
-            echo "Press Enter to apply this release (LIVE), or Ctrl+C to cancel..." >&2
-        fi
-        read -r
-    fi
-
-    # Apply to cluster
-    if [ "{{dry_run}}" = "true" ]; then
-        echo "$payload" | oc apply --dry-run=server -f -
-    else
-        echo "$payload" | oc apply -f -
-    fi
+    # Apply using helper
+    just _apply "$payload" {{skip_confirm}} {{dry_run}}
 
 # Generate a catalog YAML (outputs to stdout)
 generate-catalog type app version snapshot rc="": (_validate type app rc)
@@ -305,26 +313,8 @@ apply-catalog type app version snapshot rc="" skip_confirm="false" dry_run="true
     # Generate the catalog
     catalog=$(just debug={{debug}} generate-catalog {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
 
-    # Show the catalog to the user
-    echo "$catalog"
-
-    # Confirm unless skip_confirm is true
-    if [ "{{skip_confirm}}" != "true" ]; then
-        echo "" >&2
-        if [ "{{dry_run}}" = "true" ]; then
-            echo "Press Enter to apply this release (DRY-RUN), or Ctrl+C to cancel..." >&2
-        else
-            echo "Press Enter to apply this release (LIVE), or Ctrl+C to cancel..." >&2
-        fi
-        read -r
-    fi
-
-    # Apply to cluster
-    if [ "{{dry_run}}" = "true" ]; then
-        echo "$catalog" | oc apply --dry-run=server -f -
-    else
-        echo "$catalog" | oc apply -f -
-    fi
+    # Apply using helper
+    just _apply "$catalog" {{skip_confirm}} {{dry_run}}
 
 # Generate a bundle YAML (outputs to stdout)
 generate-bundle type app version snapshot rc="": (_validate type app rc)
@@ -376,26 +366,8 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     # Generate the bundle
     bundle=$(just debug={{debug}} generate-bundle {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
 
-    # Show the bundle to the user
-    echo "$bundle"
-
-    # Confirm unless skip_confirm is true
-    if [ "{{skip_confirm}}" != "true" ]; then
-        echo "" >&2
-        if [ "{{dry_run}}" = "true" ]; then
-            echo "Press Enter to apply this release (DRY-RUN), or Ctrl+C to cancel..." >&2
-        else
-            echo "Press Enter to apply this release (LIVE), or Ctrl+C to cancel..." >&2
-        fi
-        read -r
-    fi
-
-    # Apply to cluster
-    if [ "{{dry_run}}" = "true" ]; then
-        echo "$bundle" | oc apply --dry-run=server -f -
-    else
-        echo "$bundle" | oc apply -f -
-    fi
+    # Apply using helper
+    just _apply "$bundle" {{skip_confirm}} {{dry_run}}
 
 # Release: generate YAML, save to disk, and apply to cluster
 release target type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc)
@@ -448,24 +420,6 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
     echo "✅ Release {{target}} saved successfully!" >&2
     echo "   Directory: $release_dir" >&2
 
-    # Show the generated file
+    # Apply using helper
     echo "" >&2
-    cat "$target_file"
-
-    # Confirm unless skip_confirm is true
-    if [ "{{skip_confirm}}" != "true" ]; then
-        echo "" >&2
-        if [ "{{dry_run}}" = "true" ]; then
-            echo "Press Enter to apply this release (DRY-RUN), or Ctrl+C to cancel..." >&2
-        else
-            echo "Press Enter to apply this release (LIVE), or Ctrl+C to cancel..." >&2
-        fi
-        read -r
-    fi
-
-    # Apply to cluster using the saved file
-    if [ "{{dry_run}}" = "true" ]; then
-        oc apply --dry-run=server -f "$target_file"
-    else
-        oc apply -f "$target_file"
-    fi
+    just _apply "$(cat "$target_file")" {{skip_confirm}} {{dry_run}}
