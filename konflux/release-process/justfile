@@ -177,26 +177,34 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
         release_plan="prod-publish-{{app}}-${short_version}"
     fi
 
-    [[ "{{debug}}" == "true" ]] && echo "[generate-payload] Querying Jira for bugs and CVEs..." >&2
-
-    # Query bugs and CVEs
-    bugs_file=$(mktemp)
-    cves_file=$(mktemp)
-    trap "rm -f $bugs_file $cves_file" EXIT
-
-    just debug={{debug}} query-bugs {{app}} {{version}} false > "$bugs_file"
-    just debug={{debug}} query-cves {{app}} {{version}} > "$cves_file"
-
-    # Determine release type based on CVEs
-    cve_count=$(yq 'length' "$cves_file")
-    bug_count=$(yq 'length' "$bugs_file")
-
-    if [ "$cve_count" -gt 0 ]; then
-        release_type="RHSA"
-    elif [ "$bug_count" -gt 0 ]; then
-        release_type="RHBA"
-    else
+    # Y stream releases (X.Y.0) don't include bugs/CVEs
+    if [ "$patch" = "0" ]; then
+        [[ "{{debug}}" == "true" ]] && echo "[generate-payload] Y stream release detected, skipping bug/CVE queries..." >&2
         release_type="RHEA"
+        bug_count=0
+        cve_count=0
+    else
+        [[ "{{debug}}" == "true" ]] && echo "[generate-payload] Querying Jira for bugs and CVEs..." >&2
+
+        # Query bugs and CVEs
+        bugs_file=$(mktemp)
+        cves_file=$(mktemp)
+        trap "rm -f $bugs_file $cves_file" EXIT
+
+        just debug={{debug}} query-bugs {{app}} {{version}} false > "$bugs_file"
+        just debug={{debug}} query-cves {{app}} {{version}} > "$cves_file"
+
+        # Determine release type based on CVEs
+        cve_count=$(yq 'length' "$cves_file")
+        bug_count=$(yq 'length' "$bugs_file")
+
+        if [ "$cve_count" -gt 0 ]; then
+            release_type="RHSA"
+        elif [ "$bug_count" -gt 0 ]; then
+            release_type="RHBA"
+        else
+            release_type="RHEA"
+        fi
     fi
 
     if [[ "{{debug}}" == "true" ]]; then
@@ -214,13 +222,13 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
         output=$(echo "$output" | yq eval '.spec.data.releaseNotes.references = ["https://access.redhat.com/security/updates/classification/#important"]')
     fi
 
-    # Add bugs if any
-    if [ "$bug_count" -gt 0 ]; then
+    # Add bugs if any (only for Z stream releases)
+    if [ "$patch" != "0" ] && [ "$bug_count" -gt 0 ]; then
         output=$(echo "$output" | yq eval ".spec.data.releaseNotes.issues.fixed = load(\"$bugs_file\")")
     fi
 
-    # Add CVEs if any
-    if [ "$cve_count" -gt 0 ]; then
+    # Add CVEs if any (only for Z stream releases)
+    if [ "$patch" != "0" ] && [ "$cve_count" -gt 0 ]; then
         output=$(echo "$output" | yq eval ".spec.data.releaseNotes.cves = load(\"$cves_file\")")
     fi
 
@@ -330,19 +338,22 @@ generate-bundle type app version snapshot rc="": (_validate type app rc)
 
     [[ "{{debug}}" == "true" ]] && echo "[generate-bundle] Generating bundle YAML..." >&2
 
-    # Query bundle bugs
-    bugs_file=$(mktemp)
-    trap "rm -f $bugs_file" EXIT
-
-    just debug={{debug}} query-bugs {{app}} {{version}} true > "$bugs_file"
-
     # Build base YAML (bundle is always RHBA)
     output=$(just debug={{debug}} _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHBA")
 
-    # Add bugs if any
-    bug_count=$(yq 'length' "$bugs_file")
-    if [ "$bug_count" -gt 0 ]; then
-        output=$(echo "$output" | yq eval ".spec.data.releaseNotes.issues.fixed = load(\"$bugs_file\")")
+    # Y stream releases (X.Y.0) don't include bugs
+    if [ "$patch" != "0" ]; then
+        # Query bundle bugs
+        bugs_file=$(mktemp)
+        trap "rm -f $bugs_file" EXIT
+
+        just debug={{debug}} query-bugs {{app}} {{version}} true > "$bugs_file"
+
+        # Add bugs if any
+        bug_count=$(yq 'length' "$bugs_file")
+        if [ "$bug_count" -gt 0 ]; then
+            output=$(echo "$output" | yq eval ".spec.data.releaseNotes.issues.fixed = load(\"$bugs_file\")")
+        fi
     fi
 
     echo "$output"
