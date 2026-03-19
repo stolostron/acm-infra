@@ -45,7 +45,7 @@ query-cves app version:
     # Fetch component registry to temp file
     registry_file=$(mktemp)
     trap "rm -f $registry_file" EXIT
-    gh api repos/ngraham20/acm-config/contents/product/component-registry.yaml?ref=updated-component-registry --jq '.content' | base64 -d > "$registry_file"
+    gh api repos/stolostron/acm-config/contents/product/component-registry.yaml?ref=main --jq '.content' | base64 -d > "$registry_file"
 
     # Build the JQL query
     jql_query="project = \"Red Hat Advanced Cluster Management\" and issuetype in (Weakness, Vulnerability) and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog)"
