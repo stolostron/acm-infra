@@ -215,6 +215,31 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
 
     echo "$output"
 
+# Apply a payload release to the cluster
+apply-payload type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc)
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Generate the payload
+    payload=$(just generate-payload {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
+
+    # Show the payload to the user
+    echo "$payload"
+
+    # Confirm unless skip_confirm is true
+    if [ "{{skip_confirm}}" != "true" ]; then
+        echo "" >&2
+        echo "Press Enter to apply this release, or Ctrl+C to cancel..." >&2
+        read -r
+    fi
+
+    # Apply to cluster
+    if [ "{{dry_run}}" = "true" ]; then
+        echo "$payload" | oc apply --dry-run=server -f -
+    else
+        echo "$payload" | oc apply -f -
+    fi
+
 # Generate a catalog YAML (outputs to stdout)
 generate-catalog type app version snapshot rc="": (_validate type app rc)
     #!/usr/bin/env bash
@@ -246,6 +271,31 @@ generate-catalog type app version snapshot rc="": (_validate type app rc)
     fi
 
     echo "$output"
+
+# Apply a catalog release to the cluster
+apply-catalog type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc)
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Generate the catalog
+    catalog=$(just generate-catalog {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
+
+    # Show the catalog to the user
+    echo "$catalog"
+
+    # Confirm unless skip_confirm is true
+    if [ "{{skip_confirm}}" != "true" ]; then
+        echo "" >&2
+        echo "Press Enter to apply this release, or Ctrl+C to cancel..." >&2
+        read -r
+    fi
+
+    # Apply to cluster
+    if [ "{{dry_run}}" = "true" ]; then
+        echo "$catalog" | oc apply --dry-run=server -f -
+    else
+        echo "$catalog" | oc apply -f -
+    fi
 
 # Generate a bundle YAML (outputs to stdout)
 generate-bundle type app version snapshot rc="": (_validate type app rc)
@@ -285,3 +335,28 @@ generate-bundle type app version snapshot rc="": (_validate type app rc)
     fi
 
     echo "$output"
+
+# Apply a bundle release to the cluster
+apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc)
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Generate the bundle
+    bundle=$(just generate-bundle {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
+
+    # Show the bundle to the user
+    echo "$bundle"
+
+    # Confirm unless skip_confirm is true
+    if [ "{{skip_confirm}}" != "true" ]; then
+        echo "" >&2
+        echo "Press Enter to apply this release, or Ctrl+C to cancel..." >&2
+        read -r
+    fi
+
+    # Apply to cluster
+    if [ "{{dry_run}}" = "true" ]; then
+        echo "$bundle" | oc apply --dry-run=server -f -
+    else
+        echo "$bundle" | oc apply -f -
+    fi
