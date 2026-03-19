@@ -11,7 +11,7 @@ query-bugs app version bundle:
     if [ "{{bundle}}" = "true" ]; then
         bundle_clause=" and labels = \"bundle-bug\""
     else
-        bundle_clause=" and labels != \"bundle-bug\""
+        bundle_clause=" and (labels is EMPTY OR labels != \"bundle-bug\")"
     fi
 
     # Build the JQL query for bugs
@@ -72,40 +72,34 @@ query-cves app version:
     # Load component registry
     registry=$(yq -o=json "$registry_file")
 
-    # Process with jq - using component registry
-    echo "$jira_output" | jq -s --argjson registry "$registry" --arg suffix "$suffix" '
-        # Get jira data as array
+    # Output YAML
+    output=$(echo "$jira_output" | jq -s --argjson registry "$registry" --arg suffix "$suffix" '
         .[0] as $jira |
-
-        # Build lookup table: prodseccomponent -> konflux_component (skip nulls)
         ($registry.components | map(select(.prodseccomponent != null)) | map({(.prodseccomponent): .konflux_component}) | add) as $lookup |
-
-        # Process jira issues
         $jira | map({
-            # Extract CVE ID from labels
             key: (.fields.labels[] | select(test("^CVE-[0-9]+-[0-9]+$"))),
-
-            # Extract pscomponent from labels
             prodseccomponent: (.fields.labels[] | select(startswith("pscomponent:")))
         }) |
-
-        # Lookup konflux component and build component name
         map(
+            .prodseccomponent as $ps |
             .component = (
-                $lookup[.prodseccomponent] //
+                $lookup[$ps] //
                 (
-                    "⚠️  Missing mapping for: " + .prodseccomponent + " (CVE: " + .key + ")" | debug |
-                    "UNKNOWN"
+                    ("⚠️  Missing mapping for: " + $ps + " (CVE: " + .key + ")") | debug |
+                    "FIXME:" + $ps
                 )
             ) + "-" + $suffix
         ) |
-
-        # Select only key and component
         map({key, component}) |
-
-        # Get unique entries
         unique
-    ' | yq -p=json
+    ' | yq -p=json)
+
+    echo "$output"
+
+    # Exit with error if any FIXME entries exist
+    if echo "$output" | grep -q "FIXME:"; then
+        exit 1
+    fi
 
 # Private: validate common inputs
 _validate type app rc:
