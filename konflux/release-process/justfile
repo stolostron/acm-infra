@@ -1,6 +1,9 @@
 # Debug flag (set to "true" to enable debug output)
 debug := "false"
 
+# Workspace directory for saving release files (can be overridden)
+workspace := "."
+
 # Query bugs from Jira for a specific application and version
 # bundle: "true" (bundle-bugs only), "false" (exclude bundle-bugs)
 query-bugs app version bundle:
@@ -388,3 +391,60 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     else
         echo "$bundle" | oc apply -f -
     fi
+
+# Release a payload: generate YAMLs and save to disk
+release-payload type app version snapshot rc="": (_validate type app rc)
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Parse version
+    major=$(echo "{{version}}" | cut -d. -f1)
+    minor=$(echo "{{version}}" | cut -d. -f2)
+    patch=$(echo "{{version}}" | cut -d. -f3)
+    short_version="${major}${minor}"
+
+    # Build directory path
+    app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
+    release_dir="{{workspace}}/${app_upper}/${app_upper}-{{version}}"
+
+    if [ "{{type}}" = "stage" ]; then
+        release_dir="${release_dir}/rc{{rc}}"
+        suffix="stage-z${patch}-rc{{rc}}"
+    else
+        suffix="prod-z${patch}"
+    fi
+
+    # Create directory if it doesn't exist
+    mkdir -p "$release_dir"
+    echo "📁 Saving release files to: $release_dir" >&2
+
+    # Fetch and save snapshot from cluster first (fail if not found)
+    echo "  Fetching snapshot from cluster..." >&2
+    snapshot_file="${release_dir}/snapshot-{{app}}-${short_version}-payload-${suffix}.yaml"
+    oc get snapshot {{snapshot}} -n crt-redhat-acm-tenant -o yaml > "$snapshot_file" || {
+        echo "❌ Failed to fetch snapshot {{snapshot}} from cluster" >&2
+        exit 1
+    }
+    echo "  ✓ Saved: $(basename "$snapshot_file")" >&2
+
+    # Generate and save payload
+    echo "  Generating payload..." >&2
+    payload_file="${release_dir}/{{app}}-${short_version}-payload-${suffix}.yaml"
+    just debug={{debug}} generate-payload {{type}} {{app}} {{version}} {{snapshot}} {{rc}} > "$payload_file"
+    echo "  ✓ Saved: $(basename "$payload_file")" >&2
+
+    # Generate and save catalog
+    echo "  Generating catalog..." >&2
+    catalog_file="${release_dir}/{{app}}-${short_version}-catalog-${suffix}.yaml"
+    just debug={{debug}} generate-catalog {{type}} {{app}} {{version}} {{snapshot}} {{rc}} > "$catalog_file"
+    echo "  ✓ Saved: $(basename "$catalog_file")" >&2
+
+    # Generate and save bundle
+    echo "  Generating bundle..." >&2
+    bundle_file="${release_dir}/{{app}}-${short_version}-bundle-${suffix}.yaml"
+    just debug={{debug}} generate-bundle {{type}} {{app}} {{version}} {{snapshot}} {{rc}} > "$bundle_file"
+    echo "  ✓ Saved: $(basename "$bundle_file")" >&2
+
+    echo "" >&2
+    echo "✅ Release files saved successfully!" >&2
+    echo "   Directory: $release_dir" >&2
