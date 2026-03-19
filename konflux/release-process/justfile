@@ -397,10 +397,16 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
         echo "$bundle" | oc apply -f -
     fi
 
-# Release a payload: generate YAMLs and save to disk
-release-payload type app version snapshot rc="": (_validate type app rc)
+# Release: generate YAML, save to disk, and apply to cluster
+release target type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc)
     #!/usr/bin/env bash
     set -euo pipefail
+
+    # Validate target
+    if [[ "{{target}}" != "payload" && "{{target}}" != "bundle" && "{{target}}" != "catalog" ]]; then
+        echo "Error: target must be 'payload', 'bundle', or 'catalog'" >&2
+        exit 1
+    fi
 
     # Parse version
     major=$(echo "{{version}}" | cut -d. -f1)
@@ -425,19 +431,41 @@ release-payload type app version snapshot rc="": (_validate type app rc)
 
     # Fetch and save snapshot from cluster first (fail if not found)
     echo "  Fetching snapshot from cluster..." >&2
-    snapshot_file="${release_dir}/snapshot-{{app}}-${short_version}-payload-${suffix}.yaml"
+    snapshot_file="${release_dir}/snapshot-{{app}}-${short_version}-{{target}}-${suffix}.yaml"
     oc get snapshot {{snapshot}} -n crt-redhat-acm-tenant -o yaml > "$snapshot_file" || {
         echo "❌ Failed to fetch snapshot {{snapshot}} from cluster" >&2
         exit 1
     }
     echo "  ✓ Saved: $(basename "$snapshot_file")" >&2
 
-    # Generate and save payload
-    echo "  Generating payload..." >&2
-    payload_file="${release_dir}/{{app}}-${short_version}-payload-${suffix}.yaml"
-    just debug={{debug}} generate-payload {{type}} {{app}} {{version}} {{snapshot}} {{rc}} > "$payload_file"
-    echo "  ✓ Saved: $(basename "$payload_file")" >&2
+    # Generate and save the appropriate YAML
+    echo "  Generating {{target}}..." >&2
+    target_file="${release_dir}/{{app}}-${short_version}-{{target}}-${suffix}.yaml"
+    just debug={{debug}} generate-{{target}} {{type}} {{app}} {{version}} {{snapshot}} {{rc}} > "$target_file"
+    echo "  ✓ Saved: $(basename "$target_file")" >&2
 
     echo "" >&2
-    echo "✅ Release payload saved successfully!" >&2
+    echo "✅ Release {{target}} saved successfully!" >&2
     echo "   Directory: $release_dir" >&2
+
+    # Show the generated file
+    echo "" >&2
+    cat "$target_file"
+
+    # Confirm unless skip_confirm is true
+    if [ "{{skip_confirm}}" != "true" ]; then
+        echo "" >&2
+        if [ "{{dry_run}}" = "true" ]; then
+            echo "Press Enter to apply this release (DRY-RUN), or Ctrl+C to cancel..." >&2
+        else
+            echo "Press Enter to apply this release (LIVE), or Ctrl+C to cancel..." >&2
+        fi
+        read -r
+    fi
+
+    # Apply to cluster using the saved file
+    if [ "{{dry_run}}" = "true" ]; then
+        oc apply --dry-run=server -f "$target_file"
+    else
+        oc apply -f "$target_file"
+    fi
