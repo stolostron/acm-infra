@@ -121,8 +121,8 @@ _validate type app rc:
         exit 1
     fi
 
-# Private: apply YAML to cluster with confirmation
-_apply yaml skip_confirm="false" dry_run="true":
+# Private: show YAML and confirm
+_show_and_confirm yaml skip_confirm="false" dry_run="true":
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -133,12 +133,20 @@ _apply yaml skip_confirm="false" dry_run="true":
     if [ "{{skip_confirm}}" != "true" ]; then
         echo "" >&2
         if [ "{{dry_run}}" = "true" ]; then
-            echo "Press Enter to apply this release (DRY-RUN), or Ctrl+C to cancel..." >&2
+            echo "Press Enter to continue (DRY-RUN), or Ctrl+C to cancel..." >&2
         else
-            echo "Press Enter to apply this release (LIVE), or Ctrl+C to cancel..." >&2
+            echo "Press Enter to continue (LIVE), or Ctrl+C to cancel..." >&2
         fi
         read -r
     fi
+
+# Private: apply YAML to cluster with confirmation
+_apply yaml skip_confirm="false" dry_run="true":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Show and confirm
+    just _show_and_confirm "{{yaml}}" {{skip_confirm}} {{dry_run}}
 
     # Apply to cluster
     if [ "{{dry_run}}" = "true" ]; then
@@ -410,16 +418,26 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
     }
     echo "  ✓ Saved: $(basename "$snapshot_file")" >&2
 
-    # Generate and save the appropriate YAML
+    # Generate the YAML
     echo "  Generating {{target}}..." >&2
-    target_file="${release_dir}/{{app}}-${short_version}-{{target}}-${suffix}.yaml"
-    just debug={{debug}} generate-{{target}} {{type}} {{app}} {{version}} {{snapshot}} {{rc}} > "$target_file"
-    echo "  ✓ Saved: $(basename "$target_file")" >&2
+    target_yaml=$(just debug={{debug}} generate-{{target}} {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
 
+    # Show and confirm before saving
     echo "" >&2
+    just _show_and_confirm "$target_yaml" {{skip_confirm}} {{dry_run}}
+
+    # Save to disk after confirmation
+    target_file="${release_dir}/{{app}}-${short_version}-{{target}}-${suffix}.yaml"
+    echo "$target_yaml" > "$target_file"
+    echo "" >&2
+    echo "  ✓ Saved: $(basename "$target_file")" >&2
     echo "✅ Release {{target}} saved successfully!" >&2
     echo "   Directory: $release_dir" >&2
 
-    # Apply using helper
+    # Apply to cluster
     echo "" >&2
-    just _apply "$(cat "$target_file")" {{skip_confirm}} {{dry_run}}
+    if [ "{{dry_run}}" = "true" ]; then
+        echo "$target_yaml" | oc apply --dry-run=server -f -
+    else
+        echo "$target_yaml" | oc apply -f -
+    fi
