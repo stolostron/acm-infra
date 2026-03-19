@@ -58,6 +58,17 @@ query-cves app version:
         fi
     }
 
+    # Debug: Show CVE -> Jira issue mapping
+    if [[ "{{debug}}" == "true" ]]; then
+        echo "[query-cves] CVE to Jira Issue mapping:" >&2
+        echo "$jira_output" | jq -r '.[] |
+            (.fields.labels[] | select(test("^CVE-[0-9]+-[0-9]+$"))) as $cve |
+            (.fields.labels[] | select(startswith("pscomponent:"))) as $ps |
+            "\u001b]8;;https://redhat.atlassian.net/browse/\(.key)\u001b\\\(.key)\u001b]8;;\u001b\\: \($cve) (\($ps))"
+        ' | sort -k2 >&2 || true
+        echo "" >&2
+    fi
+
     # Load component registry
     registry=$(yq -o=json "$registry_file")
 
@@ -124,7 +135,7 @@ _build_base app snapshot release_name release_plan release_type:
         echo "[_build_base] release_name={{release_name}}, release_plan={{release_plan}}, release_type={{release_type}}" >&2
     fi
 
-    namespace="crt-redhat-{{app}}-tenant"
+    namespace="crt-redhat-acm-tenant"
     [[ "{{debug}}" == "true" ]] && echo "[_build_base] namespace=$namespace" >&2 || true
 
     author=$(git config user.email | cut -d'@' -f1)
@@ -166,15 +177,15 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
         release_plan="prod-publish-{{app}}-${short_version}"
     fi
 
-    [[ "{{debug}}" == "true" ]] && echo "Querying Jira for bugs and CVEs..." >&2
+    [[ "{{debug}}" == "true" ]] && echo "[generate-payload] Querying Jira for bugs and CVEs..." >&2
 
     # Query bugs and CVEs
     bugs_file=$(mktemp)
     cves_file=$(mktemp)
     trap "rm -f $bugs_file $cves_file" EXIT
 
-    just query-bugs {{app}} {{version}} false > "$bugs_file"
-    just query-cves {{app}} {{version}} > "$cves_file"
+    just debug={{debug}} query-bugs {{app}} {{version}} false > "$bugs_file"
+    just debug={{debug}} query-cves {{app}} {{version}} > "$cves_file"
 
     # Determine release type based on CVEs
     cve_count=$(yq 'length' "$cves_file")
@@ -189,14 +200,14 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
     fi
 
     if [[ "{{debug}}" == "true" ]]; then
-        echo "Generating payload YAML..." >&2
-        echo "  Release type: $release_type" >&2
-        echo "  Bugs: $bug_count" >&2
-        echo "  CVEs: $cve_count" >&2
+        echo "[generate-payload] Generating payload YAML..." >&2
+        echo "[generate-payload]   Release type: $release_type" >&2
+        echo "[generate-payload]   Bugs: $bug_count" >&2
+        echo "[generate-payload]   CVEs: $cve_count" >&2
     fi
 
     # Build base YAML
-    output=$(just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "$release_type")
+    output=$(just debug={{debug}} _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "$release_type")
 
     # Add references for ACM RHSA
     if [[ "{{app}}" == "acm" && "$release_type" == "RHSA" ]]; then
@@ -221,7 +232,7 @@ apply-payload type app version snapshot rc="" skip_confirm="false" dry_run="true
     set -euo pipefail
 
     # Generate the payload
-    payload=$(just generate-payload {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
+    payload=$(just debug={{debug}} generate-payload {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
 
     # Show the payload to the user
     echo "$payload"
@@ -260,10 +271,10 @@ generate-catalog type app version snapshot rc="": (_validate type app rc)
         release_plan="{{app}}-release-plan-prod"
     fi
 
-    [[ "{{debug}}" == "true" ]] && echo "Generating catalog YAML..." >&2
+    [[ "{{debug}}" == "true" ]] && echo "[generate-catalog] Generating catalog YAML..." >&2
 
     # Build base YAML (catalog is always RHEA)
-    output=$(just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHEA")
+    output=$(just debug={{debug}} _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHEA")
 
     # Add references for ACM
     if [[ "{{app}}" == "acm" ]]; then
@@ -278,7 +289,7 @@ apply-catalog type app version snapshot rc="" skip_confirm="false" dry_run="true
     set -euo pipefail
 
     # Generate the catalog
-    catalog=$(just generate-catalog {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
+    catalog=$(just debug={{debug}} generate-catalog {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
 
     # Show the catalog to the user
     echo "$catalog"
@@ -317,16 +328,16 @@ generate-bundle type app version snapshot rc="": (_validate type app rc)
         release_plan="prod-publish-bundle-{{app}}-${short_version}"
     fi
 
-    [[ "{{debug}}" == "true" ]] && echo "Generating bundle YAML..." >&2
+    [[ "{{debug}}" == "true" ]] && echo "[generate-bundle] Generating bundle YAML..." >&2
 
     # Query bundle bugs
     bugs_file=$(mktemp)
     trap "rm -f $bugs_file" EXIT
 
-    just query-bugs {{app}} {{version}} true > "$bugs_file"
+    just debug={{debug}} query-bugs {{app}} {{version}} true > "$bugs_file"
 
     # Build base YAML (bundle is always RHBA)
-    output=$(just _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHBA")
+    output=$(just debug={{debug}} _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHBA")
 
     # Add bugs if any
     bug_count=$(yq 'length' "$bugs_file")
@@ -342,7 +353,7 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     set -euo pipefail
 
     # Generate the bundle
-    bundle=$(just generate-bundle {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
+    bundle=$(just debug={{debug}} generate-bundle {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
 
     # Show the bundle to the user
     echo "$bundle"
