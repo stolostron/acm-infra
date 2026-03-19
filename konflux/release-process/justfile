@@ -242,7 +242,11 @@ apply-payload type app version snapshot rc="" skip_confirm="false" dry_run="true
     # Confirm unless skip_confirm is true
     if [ "{{skip_confirm}}" != "true" ]; then
         echo "" >&2
-        echo "Press Enter to apply this release, or Ctrl+C to cancel..." >&2
+        if [ "{{dry_run}}" = "true" ]; then
+            echo "Press Enter to apply this release (DRY-RUN), or Ctrl+C to cancel..." >&2
+        else
+            echo "Press Enter to apply this release (LIVE), or Ctrl+C to cancel..." >&2
+        fi
         read -r
     fi
 
@@ -299,7 +303,11 @@ apply-catalog type app version snapshot rc="" skip_confirm="false" dry_run="true
     # Confirm unless skip_confirm is true
     if [ "{{skip_confirm}}" != "true" ]; then
         echo "" >&2
-        echo "Press Enter to apply this release, or Ctrl+C to cancel..." >&2
+        if [ "{{dry_run}}" = "true" ]; then
+            echo "Press Enter to apply this release (DRY-RUN), or Ctrl+C to cancel..." >&2
+        else
+            echo "Press Enter to apply this release (LIVE), or Ctrl+C to cancel..." >&2
+        fi
         read -r
     fi
 
@@ -366,7 +374,11 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     # Confirm unless skip_confirm is true
     if [ "{{skip_confirm}}" != "true" ]; then
         echo "" >&2
-        echo "Press Enter to apply this release, or Ctrl+C to cancel..." >&2
+        if [ "{{dry_run}}" = "true" ]; then
+            echo "Press Enter to apply this release (DRY-RUN), or Ctrl+C to cancel..." >&2
+        else
+            echo "Press Enter to apply this release (LIVE), or Ctrl+C to cancel..." >&2
+        fi
         read -r
     fi
 
