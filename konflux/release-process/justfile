@@ -135,8 +135,13 @@ _build_base app snapshot release_name release_plan release_type:
     namespace="crt-redhat-acm-tenant"
     [[ "{{debug}}" == "true" ]] && echo "[_build_base] namespace=$namespace" >&2 || true
 
-    author=$(git config user.email | cut -d'@' -f1)
-    author=${author:-unknown}
+    author=$(git config user.email 2>/dev/null | cut -d'@' -f1)
+    if [ -z "$author" ]; then
+        echo "❌ Failed to get git user.email. Please configure git:" >&2
+        echo "   git config user.name \"Your Name\"" >&2
+        echo "   git config user.email \"your.email@example.com\"" >&2
+        exit 1
+    fi
     [[ "{{debug}}" == "true" ]] && echo "[_build_base] author=$author" >&2 || true
 
     [[ "{{debug}}" == "true" ]] && echo "[_build_base] Running yq eval..." >&2 || true
@@ -433,18 +438,6 @@ release-payload type app version snapshot rc="": (_validate type app rc)
     just debug={{debug}} generate-payload {{type}} {{app}} {{version}} {{snapshot}} {{rc}} > "$payload_file"
     echo "  ✓ Saved: $(basename "$payload_file")" >&2
 
-    # Generate and save catalog
-    echo "  Generating catalog..." >&2
-    catalog_file="${release_dir}/{{app}}-${short_version}-catalog-${suffix}.yaml"
-    just debug={{debug}} generate-catalog {{type}} {{app}} {{version}} {{snapshot}} {{rc}} > "$catalog_file"
-    echo "  ✓ Saved: $(basename "$catalog_file")" >&2
-
-    # Generate and save bundle
-    echo "  Generating bundle..." >&2
-    bundle_file="${release_dir}/{{app}}-${short_version}-bundle-${suffix}.yaml"
-    just debug={{debug}} generate-bundle {{type}} {{app}} {{version}} {{snapshot}} {{rc}} > "$bundle_file"
-    echo "  ✓ Saved: $(basename "$bundle_file")" >&2
-
     echo "" >&2
-    echo "✅ Release files saved successfully!" >&2
+    echo "✅ Release payload saved successfully!" >&2
     echo "   Directory: $release_dir" >&2
