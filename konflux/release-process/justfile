@@ -5,8 +5,8 @@ debug := "false"
 workspace := "."
 
 # Query bugs from Jira for a specific application and version
-# bundle: "true" (bundle-bugs only), "false" (exclude bundle-bugs)
-query-bugs app version bundle:
+# bundle: "true" (bundle-bugs only), "false" (exclude bundle-bugs, default)
+query-bugs app version bundle="false":
     #!/usr/bin/env bash
     set -euo pipefail
 
