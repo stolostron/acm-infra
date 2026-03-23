@@ -419,6 +419,7 @@ clone-release-mgmt branch_name cert_file="":
     echo "✅ Branch {{branch_name}} created from origin/main"
 
 # Release: generate YAML, save to disk, and apply to cluster
+[arg("dry_run", long="dry_run")]
 release target type app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="": (_validate type app rc)
     #!/usr/bin/env bash
     set -euo pipefail
