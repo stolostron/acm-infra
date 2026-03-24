@@ -43,6 +43,10 @@ on:
         required: false
         default: '60'
 
+concurrency:
+  group: compliance-scan-${{ github.event_name }}
+  cancel-in-progress: true
+
 env:
   JIRA_SERVER: "https://redhat.atlassian.net"
   JIRA_PROJECT: "ACM"
@@ -628,7 +632,14 @@ jobs:
           ls -lah ./data/ || echo "Script data directory is empty or does not exist"
           echo ""
 
-          # Move CSV file to workspace data directory if it exists
+          # Move CSV files to workspace data directory if they exist
+          SCRIPT_PENDING_CSV="./data/${{ matrix.application }}-pending-failures.csv"
+          WORKSPACE_PENDING_CSV="${{ github.workspace }}/data/${{ matrix.application }}-pending-failures.csv"
+          if [[ -f "$SCRIPT_PENDING_CSV" ]]; then
+            mv "$SCRIPT_PENDING_CSV" "$WORKSPACE_PENDING_CSV"
+            echo "✓ Pending failures CSV moved"
+          fi
+
           if [[ -f "$SCRIPT_CSV_FILE" ]]; then
             echo "Moving CSV from $SCRIPT_CSV_FILE to $WORKSPACE_CSV_FILE"
             mv "$SCRIPT_CSV_FILE" "$WORKSPACE_CSV_FILE"
@@ -672,11 +683,6 @@ jobs:
           echo "=================================================="
           echo "Checking Release Pipeline Status for ${{ matrix.application }}"
           echo "=================================================="
-
-          source ./compliance.sh --help >/dev/null 2>&1 || true
-
-          # Source required libraries
-          source ./github-auth.sh
 
           # Check releases directly
           RELEASE_CSV="${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv"

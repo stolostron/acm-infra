@@ -1914,7 +1914,7 @@ h3. Pipeline Run Link
         elif [[ "$status" == "Succeeded" ]]; then
             # Auto-close any open release failure JIRAs for this app and release
             if [[ "$AUTO_CLOSE" == true ]]; then
-                local close_jql="project=$JIRA_PROJECT AND summary~\"Release pipeline failure\" AND summary~\"$app\" AND labels=release-failure AND labels=auto-created AND status NOT IN (Closed,Done,Resolved)"
+                local close_jql="project=$JIRA_PROJECT AND summary~\"Release pipeline failure - $release_name\" AND labels=release-failure AND labels=auto-created AND status NOT IN (Closed,Done,Resolved)"
                 local open_release_issues=""
                 open_release_issues=$(jira_search_issues "$close_jql" 2>/dev/null)
 

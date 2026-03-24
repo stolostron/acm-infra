@@ -1181,9 +1181,10 @@ for line in $components; do
                 # Write to pending CSV instead of main compliance CSV
                 echo "$line,$SCAN_TIME,$data" >> "$pendingcsvfile"
             elif ! is_ready_for_recheck "$line"; then
-                # Pending but not enough time elapsed since retrigger - skip entirely
-                local wait_mins="${RETRIGGER_WAIT_MINUTES:-60}"
+                # Pending but not enough time elapsed since retrigger - skip scan, keep in pending CSV
+                wait_mins="${RETRIGGER_WAIT_MINUTES:-60}"
                 echo "PENDING (waiting): $line - waiting for retrigger to complete (< ${wait_mins}min elapsed)" >&3
+                echo "$line,$SCAN_TIME,$data" >> "$pendingcsvfile"
             elif is_confirmed_failure "$line"; then
                 # Confirmed failure: retriggered at least once and enough time has passed, still failing
                 echo "CONFIRMED FAILURE: $line - writing to compliance CSV for JIRA creation" >&3

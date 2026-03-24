@@ -38,8 +38,8 @@ Add the following secrets:
 The workflow is already configured in [.github/workflows/konflux-compliance-scanner.yml](../../.github/workflows/konflux-compliance-scanner.yml)
 
 It will automatically run:
-- **8:00 AM EST** (13:00 UTC) - Every day (including weekends)
-- **1:00 PM EST** (18:00 UTC) - Every day (including weekends)
+- **Every 15 minutes** - Fast scan (Push, EC, Promotion checks only)
+- **Sunday 8:00 AM EST** (13:00 UTC) - Full scan (all 5 compliance dimensions)
 
 ### 3. Manual Testing
 
@@ -50,6 +50,9 @@ You can manually trigger the workflow:
 3. Choose options:
    - Application: `all`, `acm-215`, or `mce-29`
    - Retrigger failed builds: `true` or `false`
+   - Create JIRA issues: `true` or `false` (default: `true`)
+   - Scan mode: `fast` (Push/EC/Promotion only) or `full` (all 5 dimensions)
+   - Retrigger wait minutes: time to wait after retrigger before re-checking (default: `60`)
    - Squad filter: (optional) e.g., `server-foundation`
 
 ### 4. View Results
@@ -122,12 +125,12 @@ To change the schedule, edit the cron expression:
 ```yaml
 on:
   schedule:
-    # Current: 8am & 1pm EST (13:00 & 18:00 UTC), every day
-    - cron: '0 13,18 * * *'
+    - cron: '*/15 * * * *'  # Fast scan every 15 min
+    - cron: '0 13 * * 0'    # Full scan Sunday 8AM EST
 
     # Examples:
-    # Daily at 9am EST:        '0 14 * * *'
-    # Every 6 hours:           '0 */6 * * *'
+    # Every 30 minutes:        '*/30 * * * *'
+    # Every hour:              '0 * * * *'
     # Mon-Fri only at 8am EST: '0 13 * * 1-5'
 ```
 
@@ -142,6 +145,9 @@ env:
   JIRA_LABELS: "konflux,compliance,auto-created"
   SKIP_DUPLICATES: "true"       # Skip creating duplicate issues
   AUTO_CLOSE: "true"            # Auto-close resolved issues
+  RETRIGGER_WAIT_MINUTES: "60"  # Minutes to wait after retrigger before re-check
+  RELEASE_JIRA_COMPONENT: "ACM Architecture"   # JIRA component for release issues
+  RELEASE_JIRA_ASSIGNEE: "gparvin@redhat.com"  # Default assignee for release issues
 ```
 
 ## How It Works
@@ -149,7 +155,7 @@ env:
 ```
 ┌─────────────────────────────────────────────────────────┐
 │            GitHub Actions Scheduled Workflow             │
-│              (8am & 1pm EST, Every Day)                 │
+│     (Fast: every 15min / Full: Sunday 8AM EST)          │
 └────────────────────┬────────────────────────────────────┘
                      │
                      ▼
@@ -174,18 +180,29 @@ env:
 │     ├─ GitHub token                                     │
 │     └─ JIRA CLI                                         │
 │                                                          │
-│  4. Run Compliance Scan                                 │
+│  4. Restore Pending State (from GitHub Actions cache)   │
+│     └─ Previous scan's pending-failures.json            │
+│                                                          │
+│  5. Run Compliance Scan                                 │
 │     ├─ Scan Konflux components                          │
-│     ├─ Check build status                               │
+│     ├─ Fast mode: Push/EC/Promotion only                │
+│     ├─ Full mode: all 5 dimensions                      │
+│     ├─ Smart denoising: retrigger + wait + re-check     │
 │     └─ Generate CSV report                              │
 │                                                          │
-│  5. Create JIRA Issues                                  │
+│  6. Check Release Pipeline Status (full scan only)      │
+│     ├─ Query Konflux Release CRDs                       │
+│     └─ Generate release-status CSV                      │
+│                                                          │
+│  7. Create JIRA Issues (confirmed failures only)        │
 │     ├─ Parse CSV report                                 │
 │     ├─ Map components to squads                         │
-│     ├─ Create/update JIRA issues                        │
-│     └─ Close resolved issues                            │
+│     ├─ Create/update compliance JIRA issues             │
+│     ├─ Create release failure JIRA issues               │
+│     └─ Auto-close resolved issues                       │
 │                                                          │
-│  6. Upload Artifacts                                    │
+│  8. Save Pending State + Upload Artifacts               │
+│     ├─ pending-failures.json (cached for next run)      │
 │     ├─ CSV reports                                      │
 │     ├─ Execution logs                                   │
 │     └─ JIRA issue JSON                                  │
@@ -364,14 +381,15 @@ If migrating from the Docker/Kubernetes approach:
 
 ```
 .github/workflows/
-└── konflux-compliance-scanner.yml    # GitHub Actions workflow
+└── konflux-compliance-scanner.yml       # GitHub Actions workflow
 
-konflux/konflux-jira-integration/
-├── README-github-actions.md          # This file
-├── Dockerfile                        # (Legacy - not needed)
-├── cronjob.yaml                      # (Legacy - not needed)
-├── build-and-push.sh                 # (Legacy - not needed)
-└── entrypoint.sh                     # (Legacy - not needed)
+konflux/konflux-jira-integration/scripts/
+├── compliance.sh                        # Main compliance scanner
+├── create-compliance-jira-issues.sh     # JIRA issue creation/update/close
+├── pending-state.sh                     # Smart denoising state management
+├── compliance-exceptions.yaml           # Known exemptions (skip checks)
+├── github-auth.sh                       # GitHub App authentication
+└── ...
 ```
 
 ## Support
@@ -389,18 +407,26 @@ konflux/konflux-jira-integration/
 
 ---
 
-**Last Updated**: 2025-11-25
-**Version**: 2.1.0 (GitHub Actions with Tool Caching)
+**Last Updated**: 2026-03-24
+**Version**: 3.0.0 (Smart Denoising + Release Tracking)
 **Maintained By**: ACM/MCE Team
 
 ## Changelog
 
+### v3.0.0 (2026-03-24)
+- Smart denoising: retrigger + wait + re-check before creating JIRA (fixes #22)
+- Tiered scanning: fast mode (15min, Push/EC/Promotion) + full mode (weekly, all 5 dimensions)
+- Release pipeline tracking via JIRA issues (Component: ACM Architecture, Assignee: Gus Parvin)
+- Pending state persistence via GitHub Actions cache
+- Concurrency control to prevent overlapping scan runs
+- Configurable retrigger wait time (RETRIGGER_WAIT_MINUTES, default: 60)
+
 ### v2.1.0 (2025-11-25)
-- ✨ Added tool caching for 87% performance improvement
-- 🚀 Reduced workflow run time from ~15 minutes to ~2.5 minutes
-- 📦 Pinned tool versions for reproducible builds
-- 💾 Cache persists for 7 days across workflow runs
+- Added tool caching for 87% performance improvement
+- Reduced workflow run time from ~15 minutes to ~2.5 minutes
+- Pinned tool versions for reproducible builds
+- Cache persists for 7 days across workflow runs
 
 ### v2.0.0 (2025-11-21)
-- 🎉 Initial GitHub Actions implementation
-- 🔄 Migrated from Docker/Kubernetes CronJob approach
+- Initial GitHub Actions implementation
+- Migrated from Docker/Kubernetes CronJob approach
