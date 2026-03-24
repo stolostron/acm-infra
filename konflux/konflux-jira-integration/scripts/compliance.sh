@@ -6,6 +6,9 @@ exec 3>&1
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/github-auth.sh"
 
+# Source the pending state management library for smart denoising
+source "$SCRIPT_DIR/pending-state.sh"
+
 # Debug output function
 debug_echo() {
     if [ "$debug" = true ]; then
@@ -27,6 +30,9 @@ OPTIONS:
     --debug               Enable debug logging output
     --retrigger           Retrigger failed components automatically
     --squad=<squad>       Run against components owned by a specific squad
+    --scan-mode=<mode>    Scan mode: 'fast' (push/ec/promotion only) or 'full' (all 5 dimensions)
+                          Default: full
+    --enable-denoising    Enable smart denoising with pending state (two-scan confirmation)
     -h, --help            Show this help message
 
 EXAMPLES:
@@ -35,6 +41,8 @@ EXAMPLES:
     compliance.sh --debug acm-215
     compliance.sh --retrigger acm-215
     compliance.sh --squad=policy acm-215
+    compliance.sh --scan-mode=fast acm-215
+    compliance.sh --enable-denoising acm-215
 EOF
 }
 
@@ -55,6 +63,14 @@ while [[ $# -gt 0 ]]; do
         ;;
     --squad=*)
         squad="${1#*=}"
+        shift
+        ;;
+    --scan-mode=*)
+        scan_mode="${1#*=}"
+        shift
+        ;;
+    --enable-denoising)
+        enable_denoising=true
         shift
         ;;
     -h | --help)
@@ -83,6 +99,22 @@ if [[ "$show_help" == "true" ]] || [[ -z "$application" ]]; then
     exit 0
 fi
 
+# Set default scan mode
+scan_mode="${scan_mode:-full}"
+if [[ "$scan_mode" != "fast" && "$scan_mode" != "full" ]]; then
+    echo "Error: Invalid scan mode '$scan_mode'. Must be 'fast' or 'full'."
+    exit 1
+fi
+echo "Scan mode: $scan_mode"
+
+# Initialize pending state for smart denoising if enabled
+enable_denoising="${enable_denoising:-false}"
+if [[ "$enable_denoising" == "true" ]]; then
+    echo "Smart denoising: enabled (wait time: ${RETRIGGER_WAIT_MINUTES:-60} minutes)"
+    init_pending_state
+    cleanup_stale_pending
+fi
+
 # Check that we're in the correct OpenShift project
 echo "Checking OpenShift project..."
 oc_project_output=$(oc project 2>&1)
@@ -101,6 +133,12 @@ compliancefile="data/$application-compliance.csv"
 
 # Write CSV header
 echo "Konflux Component,Scan Time,Promoted Time,Promoted Status,Hermetic Builds,Enterprise Contract,Multiarch Support,Push Status,Push PipelineRun URL,EC PipelineRun URL" >$compliancefile
+
+# Initialize pending failures CSV if denoising is enabled
+if [[ "$enable_denoising" == "true" ]]; then
+    pendingcsvfile="data/$application-pending-failures.csv"
+    echo "Konflux Component,Scan Time,Promoted Time,Promoted Status,Hermetic Builds,Enterprise Contract,Multiarch Support,Push Status,Push PipelineRun URL,EC PipelineRun URL" > "$pendingcsvfile"
+fi
 
 # Capture scan time (when this script runs)
 SCAN_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -855,6 +893,100 @@ check_bundle_operator() {
     fi
 }
 
+# Function to check release pipeline status for an application
+# Outputs CSV to data/$application-release-status.csv
+check_releases() {
+    local app="$1"
+    local release_file="data/$app-release-status.csv"
+
+    echo "release_name,app,status,ec_result,timestamp,pipeline_url" > "$release_file"
+
+    echo "Checking release pipeline status for application: release-$app" >&3
+
+    # Query Konflux for Release resources for this application
+    local releases_json
+    releases_json=$(oc get releases -l "appstudio.openshift.io/application=release-$app" -o json 2>/dev/null)
+
+    if [[ -z "$releases_json" ]] || [[ "$releases_json" == "null" ]]; then
+        echo "No Release resources found for release-$app" >&3
+        return 0
+    fi
+
+    local release_count
+    release_count=$(echo "$releases_json" | jq '.items | length' 2>/dev/null)
+
+    if [[ -z "$release_count" ]] || [[ "$release_count" == "0" ]]; then
+        echo "No Release resources found for release-$app" >&3
+        return 0
+    fi
+
+    echo "Found $release_count releases for release-$app" >&3
+
+    # Process each release (most recent 10 to keep output manageable)
+    echo "$releases_json" | jq -c '.items | sort_by(.metadata.creationTimestamp) | reverse | .[:10] | .[]' 2>/dev/null | while read -r release; do
+        local release_name
+        release_name=$(echo "$release" | jq -r '.metadata.name // "unknown"')
+
+        local status
+        status=$(echo "$release" | jq -r '.status.conditions[-1].reason // .status.conditions[-1].type // "Unknown"')
+
+        # Determine overall release status
+        local release_status="Unknown"
+        local released_condition
+        released_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Released") | .status' 2>/dev/null)
+
+        if [[ "$released_condition" == "True" ]]; then
+            release_status="Succeeded"
+        elif [[ "$released_condition" == "False" ]]; then
+            release_status="Failed"
+        else
+            # Check if still in progress
+            local processing_condition
+            processing_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Processing") | .status' 2>/dev/null)
+            if [[ "$processing_condition" == "True" ]]; then
+                release_status="InProgress"
+            else
+                release_status="$status"
+            fi
+        fi
+
+        # Extract EC (Enterprise Contract) result from release conditions
+        local ec_result="Unknown"
+        local validated_condition
+        validated_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Validated") | .status' 2>/dev/null)
+        if [[ "$validated_condition" == "True" ]]; then
+            ec_result="Passed"
+        elif [[ "$validated_condition" == "False" ]]; then
+            ec_result="Failed"
+        fi
+
+        # Extract timestamp
+        local timestamp
+        timestamp=$(echo "$release" | jq -r '.metadata.creationTimestamp // "unknown"')
+
+        # Extract pipeline run URL if available
+        local pipeline_url=""
+        local pipeline_run
+        pipeline_run=$(echo "$release" | jq -r '.status.processing.pipelineRun // empty' 2>/dev/null)
+        if [[ -n "$pipeline_run" ]]; then
+            pipeline_url="https://konflux-ui.apps.stone-prd-rh01.pg1f.p1.openshiftapps.com/ns/crt-redhat-acm-tenant/pipelinerun/$pipeline_run"
+        fi
+
+        # Log status
+        if [[ "$release_status" == "Succeeded" ]]; then
+            echo "  Release $release_name: SUCCEEDED (EC: $ec_result)" >&3
+        elif [[ "$release_status" == "Failed" ]]; then
+            echo "  Release $release_name: FAILED (EC: $ec_result)" >&3
+        else
+            echo "  Release $release_name: $release_status (EC: $ec_result)" >&3
+        fi
+
+        echo "$release_name,$app,$release_status,$ec_result,$timestamp,$pipeline_url" >> "$release_file"
+    done
+
+    echo "" >&3
+}
+
 if [[ -n "$debug" && "$debug" != "true" ]]; then
     components=$debug
 elif [[ -n "$squad" ]]; then
@@ -913,15 +1045,23 @@ for line in $components; do
     if [[ -n "$registry_repo" ]]; then
         echo "    Repository: $registry_repo"
     fi
-    yaml=$(curl -Ls -w "%{http_code}" $push)
-    http_code_push="${yaml: -3}"
-    yaml="${yaml%???}"
-    [[ -n "$debug" && "$http_code_push" == "404" ]] && echo -e "[debug] \033[31m404 error\033[0m fetching push YAML from $push" >&3
 
-    pull_yaml=$(curl -Ls -w "%{http_code}" $pull)
-    http_code_pull="${pull_yaml: -3}"
-    pull_yaml="${pull_yaml%???}"
-    [[ -n "$debug" && "$http_code_pull" == "404" ]] && echo -e "[debug] \033[31m404 error\033[0m fetching pull YAML from $pull" >&3
+    # In fast scan mode, skip fetching .tekton YAML files (used for hermetic and multiarch checks)
+    if [[ "$scan_mode" == "full" ]]; then
+        yaml=$(curl -Ls -w "%{http_code}" $push)
+        http_code_push="${yaml: -3}"
+        yaml="${yaml%???}"
+        [[ -n "$debug" && "$http_code_push" == "404" ]] && echo -e "[debug] \033[31m404 error\033[0m fetching push YAML from $push" >&3
+
+        pull_yaml=$(curl -Ls -w "%{http_code}" $pull)
+        http_code_pull="${pull_yaml: -3}"
+        pull_yaml="${pull_yaml%???}"
+        [[ -n "$debug" && "$http_code_pull" == "404" ]] && echo -e "[debug] \033[31m404 error\033[0m fetching pull YAML from $pull" >&3
+    else
+        yaml=""
+        pull_yaml=""
+        debug_echo "[debug] Fast scan mode: skipping .tekton YAML fetch for hermetic/multiarch checks"
+    fi
 
     # Check if component is a bundle operator
     bundle_result=$(check_bundle_operator "$line")
@@ -933,9 +1073,11 @@ for line in $components; do
         image_stale="false"
     fi
 
-    # Check hermetic builds (skip for bundle operators)
+    # Check hermetic builds (skip for bundle operators, skip in fast scan mode)
     if [[ "$bundle_result" == "BUNDLE_OPERATOR" ]]; then
         data="$data,Not Applicable"
+    elif [[ "$scan_mode" == "fast" ]]; then
+        data="$data,Skipped (Fast Scan)"
     else
         data="$data,$(check_hermetic_builds "$yaml" "$pull_yaml" "$authorization" "$org" "$repo")"
     fi
@@ -977,9 +1119,11 @@ for line in $components; do
 
     data="$data,$ec_status"
 
-    # Check multiarch support (skip for bundle operators)
+    # Check multiarch support (skip for bundle operators, skip in fast scan mode)
     if [[ "$bundle_result" == "BUNDLE_OPERATOR" ]]; then
         data="$data,Not Applicable"
+    elif [[ "$scan_mode" == "fast" ]]; then
+        data="$data,Skipped (Fast Scan)"
     else
         data="$data,$(check_multiarch_support "$yaml" "$repo")"
     fi
@@ -989,27 +1133,118 @@ for line in $components; do
 
     echo ""
 
-    echo "$line,$SCAN_TIME,$data" >>$compliancefile
+    # Determine if this component is failing (check for any failure indicators in data)
+    component_is_failing=false
+    if echo "$data" | grep -qE "(^|,)(Failed|Push Failure|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE|Not Enabled|Not Compliant)(,|$)" || [[ "$image_stale" == "true" ]]; then
+        component_is_failing=true
+    fi
 
-    # Retrigger component if build failed and --retrigger flag is set
-    if [[ "$retrigger" == "true" ]]; then
-        # Skip retriggering for components with skipped null status (excepted)
-        if echo "$data" | grep -qE "(^|,)(Skipped_Null|Skipped \(Null\))(,|$)"; then
-            debug_echo "[debug] Skipping retrigger for $line - null status is excepted"
-        # Skip retriggering for components with null/blank status (nothing to retrigger)
-        elif echo "$data" | grep -qE "(^|,)(EC_BLANK|Push Failure)(,|$)" && [[ "$push_status" == "Failed" || "$push_status" == "null" || -z "$push_status" ]]; then
-            debug_echo "[debug] Skipping retrigger for $line - null status, nothing to retrigger"
-        # Check if component has any failures (Push Failure or actual Failed status, but not Successful) or stale image
-        elif echo "$data" | grep -qE "(^|,)(Failed|Push Failure|IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE|Not Enabled|Not Compliant)(,|$)" || [[ "$image_stale" == "true" ]]; then
-            echo "🔄 Retriggering component: $line" >&3
-            if kubectl annotate components/$line build.appstudio.openshift.io/request=trigger-pac-build --overwrite; then
-                echo "✅ Successfully triggered rebuild for $line" >&3
+    # Collect failed dimensions for pending state
+    failed_dimensions=""
+    if echo "$data" | grep -qE "(^|,)(Failed)(,|$)"; then
+        failed_dimensions="${failed_dimensions:+$failed_dimensions,}push"
+    fi
+    if echo "$data" | grep -qE "(^|,)(Not Compliant|Push Failure)(,|$)"; then
+        failed_dimensions="${failed_dimensions:+$failed_dimensions,}ec"
+    fi
+    if echo "$data" | grep -qE "(^|,)(IMAGE_PULL_FAILURE|INSPECTION_FAILURE|DIGEST_FAILURE)(,|$)"; then
+        failed_dimensions="${failed_dimensions:+$failed_dimensions,}promotion"
+    fi
+    if echo "$data" | grep -q "Not Enabled"; then
+        # Determine which "Not Enabled" dimension(s) - check by field position
+        hermetic_field=$(echo "$data" | cut -d',' -f3)
+        multiarch_field=$(echo "$data" | cut -d',' -f5)
+        if [[ "$hermetic_field" == "Not Enabled" ]]; then
+            failed_dimensions="${failed_dimensions:+$failed_dimensions,}hermetic"
+        fi
+        if [[ "$multiarch_field" == "Not Enabled" ]]; then
+            failed_dimensions="${failed_dimensions:+$failed_dimensions,}multiarch"
+        fi
+    fi
+    if [[ "$image_stale" == "true" ]]; then
+        failed_dimensions="${failed_dimensions:+$failed_dimensions,}stale"
+    fi
+
+    # Smart denoising logic
+    if [[ "$enable_denoising" == "true" ]]; then
+        if [[ "$component_is_failing" == "true" ]]; then
+            if ! is_pending "$line"; then
+                # First-time failure: add to pending, retrigger, do NOT write to main CSV
+                echo "PENDING (new): $line - adding to pending state, retriggering build" >&3
+                add_to_pending "$line" "$application" "$failed_dimensions"
+                # Retrigger the component
+                if kubectl annotate components/$line build.appstudio.openshift.io/request=trigger-pac-build --overwrite 2>/dev/null; then
+                    echo "  Retriggered $line successfully" >&3
+                else
+                    echo "  WARNING: Failed to retrigger $line" >&3
+                fi
+                # Write to pending CSV instead of main compliance CSV
+                echo "$line,$SCAN_TIME,$data" >> "$pendingcsvfile"
+            elif ! is_ready_for_recheck "$line"; then
+                # Pending but not enough time elapsed since retrigger - skip entirely
+                local wait_mins="${RETRIGGER_WAIT_MINUTES:-60}"
+                echo "PENDING (waiting): $line - waiting for retrigger to complete (< ${wait_mins}min elapsed)" >&3
+            elif is_confirmed_failure "$line"; then
+                # Confirmed failure: retriggered at least once and enough time has passed, still failing
+                echo "CONFIRMED FAILURE: $line - writing to compliance CSV for JIRA creation" >&3
+                echo "$line,$SCAN_TIME,$data" >> "$compliancefile"
+                remove_from_pending "$line"
             else
-                echo "❌ Failed to trigger rebuild for $line" >&3
+                # Pending, ready for recheck, but retrigger_count is 0 - retrigger again and increment
+                echo "PENDING (retrigger #2): $line - retriggering again" >&3
+                increment_retrigger "$line"
+                if kubectl annotate components/$line build.appstudio.openshift.io/request=trigger-pac-build --overwrite 2>/dev/null; then
+                    echo "  Retriggered $line successfully" >&3
+                else
+                    echo "  WARNING: Failed to retrigger $line" >&3
+                fi
+                echo "$line,$SCAN_TIME,$data" >> "$pendingcsvfile"
+            fi
+        else
+            # Component is passing
+            if is_pending "$line"; then
+                echo "RECOVERED: $line - was pending, now passing. Removing from pending state." >&3
+                remove_from_pending "$line"
+            fi
+            # Write passing component to main CSV as normal
+            echo "$line,$SCAN_TIME,$data" >> "$compliancefile"
+        fi
+    else
+        # Denoising disabled: write all results to main CSV (original behavior)
+        echo "$line,$SCAN_TIME,$data" >> "$compliancefile"
+
+        # Retrigger component if build failed and --retrigger flag is set
+        if [[ "$retrigger" == "true" ]]; then
+            # Skip retriggering for components with skipped null status (excepted)
+            if echo "$data" | grep -qE "(^|,)(Skipped_Null|Skipped \(Null\))(,|$)"; then
+                debug_echo "[debug] Skipping retrigger for $line - null status is excepted"
+            # Skip retriggering for components with null/blank status (nothing to retrigger)
+            elif echo "$data" | grep -qE "(^|,)(EC_BLANK|Push Failure)(,|$)" && [[ "$push_status" == "Failed" || "$push_status" == "null" || -z "$push_status" ]]; then
+                debug_echo "[debug] Skipping retrigger for $line - null status, nothing to retrigger"
+            # Check if component has any failures (Push Failure or actual Failed status, but not Successful) or stale image
+            elif [[ "$component_is_failing" == "true" ]]; then
+                echo "Retriggering component: $line" >&3
+                if kubectl annotate components/$line build.appstudio.openshift.io/request=trigger-pac-build --overwrite; then
+                    echo "Successfully triggered rebuild for $line" >&3
+                else
+                    echo "Failed to trigger rebuild for $line" >&3
+                fi
             fi
         fi
     fi
 done
 
 echo "" >&3
-echo "✅ Compliance scan completed" >&3
+echo "Compliance scan completed (mode: $scan_mode)" >&3
+
+# Show pending state summary if denoising is enabled
+if [[ "$enable_denoising" == "true" ]]; then
+    pending_count=$(get_pending_components | wc -l | tr -d ' ')
+    echo "Pending components (awaiting confirmation): $pending_count" >&3
+    if [[ "$pending_count" -gt 0 ]]; then
+        echo "Pending components:" >&3
+        get_pending_components | while read -r pc; do
+            echo "  - $pc" >&3
+        done
+    fi
+fi
