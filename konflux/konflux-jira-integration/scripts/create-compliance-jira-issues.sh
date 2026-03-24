@@ -1875,6 +1875,10 @@ h3. Pipeline Run Link
                         release_jira_args+=("--affects-version" "$AFFECTS_VERSION")
                     fi
 
+                    # Set component and assignee for release issues
+                    release_jira_args+=("--component" "${RELEASE_JIRA_COMPONENT:-ACM Architecture}")
+                    release_jira_args+=("--assignee" "${RELEASE_JIRA_ASSIGNEE:-gparvin@redhat.com}")
+
                     # Add labels
                     IFS=',' read -ra RLABEL_ARRAY <<< "$all_labels"
                     for rlabel in "${RLABEL_ARRAY[@]}"; do
