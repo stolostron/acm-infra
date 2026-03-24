@@ -1870,9 +1870,12 @@ h3. Pipeline Run Link
                         "--no-input"
                     )
 
-                    # Add Affects Version/s if available
-                    if [[ -n "$AFFECTS_VERSION" ]]; then
-                        release_jira_args+=("--affects-version" "$AFFECTS_VERSION")
+                    # Derive version from app name in CSV (independent of outer AFFECTS_VERSION)
+                    local release_version
+                    release_version=$(get_affects_version "$app")
+                    if [[ -n "$release_version" ]]; then
+                        release_jira_args+=("--affects-version" "$release_version")
+                        release_jira_args+=("--fix-version" "$release_version")
                     fi
 
                     # Set component and assignee for release issues
