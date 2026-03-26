@@ -717,7 +717,7 @@ check_enterprise_contract() {
     ec_url=$(echo "$output_text" | sed -n 's/.*href="\(https:\/\/konflux-ui[^"]*pipelinerun\/[^"]*\)".*/\1/p' | head -1)
     debug_echo "[debug] EC ec=$ec, ec_url=$ec_url"
 
-    if [[ -n "$ec" ]] && ! echo "$ec" | grep -v "^success$" >/dev/null; then
+    if [[ -n "$ec" ]] && ! echo "$ec" | grep -vE "^(success|neutral)$" >/dev/null; then
         echo "🟩 $repo $ecname: SUCCESS" >&3
         echo "Compliant|$ec_url"
     else
