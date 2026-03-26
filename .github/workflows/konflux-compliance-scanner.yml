@@ -687,6 +687,51 @@ jobs:
             echo "Note: Workflow will continue despite errors"
           fi
 
+      - name: Check release pipeline status
+        if: steps.should_run.outputs.skip != 'true'
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
+        run: |
+          echo "=================================================="
+          echo "Checking Release Pipeline Status for ${{ matrix.application }}"
+          echo "=================================================="
+
+          export RELEASE_CSV="${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv"
+          source ./check-releases.sh
+          check_releases "${{ matrix.application }}"
+
+          echo ""
+          if [[ -f "$RELEASE_CSV" ]]; then
+            RELEASE_LINES=$(tail -n +2 "$RELEASE_CSV" | wc -l | tr -d ' ')
+            echo "Total releases tracked: $RELEASE_LINES"
+          fi
+
+      - name: Create release JIRA issues
+        if: steps.should_run.outputs.skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.create_jira_issues == 'true')
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER: ${{ secrets.JIRA_USER }}
+          JIRA_AUTH_TYPE: ${{ env.JIRA_AUTH_TYPE }}
+          JIRA_SERVER: ${{ env.JIRA_SERVER }}
+          JIRA_INSTALLATION: ${{ env.JIRA_INSTALLATION }}
+          JIRA_PROJECT: ${{ env.JIRA_PROJECT }}
+          JIRA_BOARD: ${{ env.JIRA_BOARD }}
+        run: |
+          echo "=================================================="
+          echo "Creating Release JIRA Issues for ${{ matrix.application }}"
+          echo "=================================================="
+
+          RELEASE_CSV="${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv"
+
+          if [[ -f "$RELEASE_CSV" ]]; then
+            source ./create-compliance-jira-issues.sh
+            create_release_jira_issues "$RELEASE_CSV" 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-release-jira.log"
+          else
+            echo "No release status CSV found, skipping"
+          fi
+
       - name: Upload scan results
         if: always() && steps.should_run.outputs.skip != 'true' && env.ACT != 'true'
         uses: actions/upload-artifact@v4
@@ -694,6 +739,7 @@ jobs:
           name: compliance-results-${{ matrix.application }}
           path: |
             ${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv
+            ${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv
             ${{ github.workspace }}/logs/${{ matrix.application }}-*.log
             ${{ github.workspace }}/logs/${{ matrix.application }}-*.json
           retention-days: 30
