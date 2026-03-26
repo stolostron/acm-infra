@@ -1781,7 +1781,7 @@ create_release_jira_issues() {
 
         if [[ "$status" == "Failed" ]]; then
             # Check for existing release failure JIRA
-            local jql="project=$JIRA_PROJECT AND summary~\"Release pipeline failure\" AND summary~\"$release_name\" AND labels=release-failure AND labels=auto-created AND status NOT IN (Closed,Done,Resolved)"
+            local jql="project=$JIRA_PROJECT AND summary~\"Release pipeline failure - $release_name\" AND labels=release-failure AND labels=auto-created AND status NOT IN (Closed,Done,Resolved)"
             local existing_issues=""
             existing_issues=$(jira_search_issues "$jql" 2>/dev/null)
 
@@ -1904,11 +1904,11 @@ h3. Pipeline Run Link
                         success "Created release failure issue $issue_key: $jira_url/browse/$issue_key"
                         ALL_CREATED_ISSUES+=("[$app] release:$release_name:$issue_key")
                         GLOBAL_CREATED_COUNT=$((GLOBAL_CREATED_COUNT + 1))
+                        created_count=$((created_count + 1))
                     else
                         echo -e "${RED}Failed to create release failure issue for $release_name: $output${NC}" >&2
                     fi
                 fi
-                created_count=$((created_count + 1))
             fi
 
         elif [[ "$status" == "Succeeded" ]]; then

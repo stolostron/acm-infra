@@ -689,60 +689,16 @@ jobs:
 
       - name: Check release pipeline status
         if: steps.should_run.outputs.skip != 'true'
+        continue-on-error: true
         working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
         run: |
           echo "=================================================="
           echo "Checking Release Pipeline Status for ${{ matrix.application }}"
           echo "=================================================="
 
-          RELEASE_CSV="${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv"
-          echo "release_name,app,status,ec_result,timestamp,pipeline_url" > "$RELEASE_CSV"
-
-          # Query Konflux for Release resources
-          RELEASES_JSON=$(oc get releases -l "appstudio.openshift.io/application=release-${{ matrix.application }}" -o json 2>/dev/null || echo '{"items":[]}')
-          RELEASE_COUNT=$(echo "$RELEASES_JSON" | jq '.items | length' 2>/dev/null || echo 0)
-
-          echo "Found $RELEASE_COUNT releases for release-${{ matrix.application }}"
-
-          if [[ "$RELEASE_COUNT" -gt 0 ]]; then
-            echo "$RELEASES_JSON" | jq -c '.items | sort_by(.metadata.creationTimestamp) | reverse | .[:10] | .[]' 2>/dev/null | while read -r release; do
-              release_name=$(echo "$release" | jq -r '.metadata.name // "unknown"')
-
-              # Determine release status
-              release_status="Unknown"
-              released_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Released") | .status' 2>/dev/null || echo "")
-              if [[ "$released_condition" == "True" ]]; then
-                release_status="Succeeded"
-              elif [[ "$released_condition" == "False" ]]; then
-                release_status="Failed"
-              else
-                processing_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Processing") | .status' 2>/dev/null || echo "")
-                if [[ "$processing_condition" == "True" ]]; then
-                  release_status="InProgress"
-                fi
-              fi
-
-              # Extract EC result
-              ec_result="Unknown"
-              validated_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Validated") | .status' 2>/dev/null || echo "")
-              if [[ "$validated_condition" == "True" ]]; then
-                ec_result="Passed"
-              elif [[ "$validated_condition" == "False" ]]; then
-                ec_result="Failed"
-              fi
-
-              # Extract timestamp and pipeline URL
-              timestamp=$(echo "$release" | jq -r '.metadata.creationTimestamp // "unknown"')
-              pipeline_run=$(echo "$release" | jq -r '.status.processing.pipelineRun // empty' 2>/dev/null || echo "")
-              pipeline_url=""
-              if [[ -n "$pipeline_run" ]]; then
-                pipeline_url="https://konflux-ui.apps.stone-prd-rh01.pg1f.p1.openshiftapps.com/ns/crt-redhat-acm-tenant/pipelinerun/$pipeline_run"
-              fi
-
-              echo "  Release $release_name: $release_status (EC: $ec_result)"
-              echo "$release_name,${{ matrix.application }},$release_status,$ec_result,$timestamp,$pipeline_url" >> "$RELEASE_CSV"
-            done
-          fi
+          export RELEASE_CSV="${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv"
+          source ./check-releases.sh
+          check_releases "${{ matrix.application }}"
 
           echo ""
           if [[ -f "$RELEASE_CSV" ]]; then
