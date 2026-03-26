@@ -676,74 +676,6 @@ jobs:
           path: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/pending-failures.json
           key: compliance-pending-state-${{ matrix.application }}-${{ github.run_id }}
 
-      - name: Check release pipeline status
-        if: steps.should_run.outputs.skip != 'true' && env.SCAN_MODE == 'full'
-        working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
-        run: |
-          echo "=================================================="
-          echo "Checking Release Pipeline Status for ${{ matrix.application }}"
-          echo "=================================================="
-
-          # Check releases directly
-          RELEASE_CSV="${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv"
-          echo "release_name,app,status,ec_result,timestamp,pipeline_url" > "$RELEASE_CSV"
-
-          # Query Konflux for Release resources
-          RELEASES_JSON=$(oc get releases -l "appstudio.openshift.io/application=release-${{ matrix.application }}" -o json 2>/dev/null || echo '{"items":[]}')
-          RELEASE_COUNT=$(echo "$RELEASES_JSON" | jq '.items | length' 2>/dev/null || echo 0)
-
-          echo "Found $RELEASE_COUNT releases for release-${{ matrix.application }}"
-
-          if [[ "$RELEASE_COUNT" -gt 0 ]]; then
-            echo "$RELEASES_JSON" | jq -c '.items | sort_by(.metadata.creationTimestamp) | reverse | .[:10] | .[]' 2>/dev/null | while read -r release; do
-              release_name=$(echo "$release" | jq -r '.metadata.name // "unknown"')
-              status=$(echo "$release" | jq -r '.status.conditions[-1].reason // .status.conditions[-1].type // "Unknown"')
-
-              # Determine release status
-              release_status="Unknown"
-              released_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Released") | .status' 2>/dev/null || echo "")
-              if [[ "$released_condition" == "True" ]]; then
-                release_status="Succeeded"
-              elif [[ "$released_condition" == "False" ]]; then
-                release_status="Failed"
-              else
-                processing_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Processing") | .status' 2>/dev/null || echo "")
-                if [[ "$processing_condition" == "True" ]]; then
-                  release_status="InProgress"
-                else
-                  release_status="$status"
-                fi
-              fi
-
-              # Extract EC result
-              ec_result="Unknown"
-              validated_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Validated") | .status' 2>/dev/null || echo "")
-              if [[ "$validated_condition" == "True" ]]; then
-                ec_result="Passed"
-              elif [[ "$validated_condition" == "False" ]]; then
-                ec_result="Failed"
-              fi
-
-              # Extract timestamp and pipeline URL
-              timestamp=$(echo "$release" | jq -r '.metadata.creationTimestamp // "unknown"')
-              pipeline_run=$(echo "$release" | jq -r '.status.processing.pipelineRun // empty' 2>/dev/null || echo "")
-              pipeline_url=""
-              if [[ -n "$pipeline_run" ]]; then
-                pipeline_url="https://konflux-ui.apps.stone-prd-rh01.pg1f.p1.openshiftapps.com/ns/crt-redhat-acm-tenant/pipelinerun/$pipeline_run"
-              fi
-
-              echo "  Release $release_name: $release_status (EC: $ec_result)"
-              echo "$release_name,${{ matrix.application }},$release_status,$ec_result,$timestamp,$pipeline_url" >> "$RELEASE_CSV"
-            done
-          fi
-
-          echo ""
-          echo "Release status CSV: $RELEASE_CSV"
-          if [[ -f "$RELEASE_CSV" ]]; then
-            RELEASE_LINES=$(tail -n +2 "$RELEASE_CSV" | wc -l | tr -d ' ')
-            echo "Total releases tracked: $RELEASE_LINES"
-          fi
-
       - name: Create/Update JIRA issues
         if: steps.should_run.outputs.skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.create_jira_issues == 'true')
         continue-on-error: true
@@ -810,52 +742,6 @@ jobs:
             echo "Note: Workflow will continue despite errors"
           fi
 
-      - name: Create/Update Release JIRA issues
-        if: steps.should_run.outputs.skip != 'true' && env.SCAN_MODE == 'full' && (github.event_name == 'schedule' || github.event.inputs.create_jira_issues == 'true')
-        continue-on-error: true
-        working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
-        env:
-          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          JIRA_USER: ${{ secrets.JIRA_USER }}
-          JIRA_AUTH_TYPE: ${{ env.JIRA_AUTH_TYPE }}
-          JIRA_SERVER: ${{ env.JIRA_SERVER }}
-          JIRA_INSTALLATION: ${{ env.JIRA_INSTALLATION }}
-          JIRA_PROJECT: ${{ env.JIRA_PROJECT }}
-          JIRA_BOARD: ${{ env.JIRA_BOARD }}
-        run: |
-          echo "=================================================="
-          echo "Creating/Updating Release JIRA Issues for ${{ matrix.application }}"
-          echo "=================================================="
-          echo ""
-
-          RELEASE_CSV="${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv"
-
-          if [[ ! -f "$RELEASE_CSV" ]]; then
-            echo "No release status CSV found, skipping release JIRA processing"
-            exit 0
-          fi
-
-          # Source the JIRA creation script to access its functions
-          source ./create-compliance-jira-issues.sh
-
-          # Load environment for JIRA
-          load_environment
-
-          # Set APP_NAME and AFFECTS_VERSION
-          APP_NAME="${{ matrix.application }}"
-          AFFECTS_VERSION=$(get_affects_version "$APP_NAME")
-          AUTO_CLOSE="${{ env.AUTO_CLOSE }}"
-
-          # Check dependencies (skip JIRA-related checks in dry-run mode)
-          check_dependencies
-          check_jira_cli
-
-          # Process release JIRA issues
-          create_release_jira_issues "$RELEASE_CSV" 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-release-jira.log"
-
-          echo ""
-          echo "Release JIRA processing completed"
-
       - name: Upload scan results
         if: always() && steps.should_run.outputs.skip != 'true' && env.ACT != 'true'
         uses: actions/upload-artifact@v4
@@ -863,7 +749,6 @@ jobs:
           name: compliance-results-${{ matrix.application }}
           path: |
             ${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv
-            ${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv
             ${{ github.workspace }}/data/${{ matrix.application }}-pending-failures.csv
             ${{ github.workspace }}/logs/${{ matrix.application }}-*.log
             ${{ github.workspace }}/logs/${{ matrix.application }}-*.json
