@@ -1751,7 +1751,11 @@ print_final_summary() {
 # RELEASE PIPELINE JIRA ISSUES
 # ==============================================================================
 
-# Create/update/close JIRA issues for release pipeline failures
+# Create/update/close JIRA issues for release pipeline failures.
+# Aggregates all failures per application into a single JIRA issue.
+# Each Snapshot can trigger multiple Releases (one per ReleasePlan), so
+# individual Release failures often share the same root cause. Reporting
+# one JIRA per application keeps the signal-to-noise ratio manageable.
 # Args: release_csv_file
 create_release_jira_issues() {
     local release_csv="$1"
@@ -1762,14 +1766,20 @@ create_release_jira_issues() {
     fi
 
     local release_count=0
+    local failed_count=0
+    local succeeded_count=0
     local created_count=0
     local updated_count=0
     local closed_count=0
-    local skipped_count=0
 
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     info "Processing Release Pipeline JIRA Issues"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+    # --- Pass 1: collect failed and succeeded releases per app ---
+    local app_name=""
+    local -a failed_releases=()
+    local failed_details=""
 
     while IFS=',' read -r release_name app status ec_result timestamp pipeline_url; do
         # Skip header
@@ -1778,185 +1788,189 @@ create_release_jira_issues() {
         fi
 
         release_count=$((release_count + 1))
+        # Remember app name (all rows in one CSV share the same app)
+        app_name="$app"
 
         if [[ "$status" == "Failed" ]]; then
-            # Check for existing release failure JIRA
-            local jql="project=$JIRA_PROJECT AND summary~\"Release pipeline failure - $release_name\" AND labels=release-failure AND labels=auto-created AND status NOT IN (Closed,Done,Resolved)"
-            local existing_issues=""
-            existing_issues=$(jira_search_issues "$jql" 2>/dev/null)
+            failed_count=$((failed_count + 1))
+            failed_releases+=("$release_name")
 
-            if [[ -n "$existing_issues" ]]; then
-                # Update existing issue with comment
-                local existing_key
-                existing_key=$(echo "$existing_issues" | head -n 1 | awk '{print $1}' | xargs)
-                warn "Found existing release failure issue $existing_key for $release_name - adding update comment"
+            # Build a JIRA table row for this failure
+            local row="|$release_name|$ec_result|$timestamp|"
+            if [[ -n "$pipeline_url" && "$pipeline_url" != "null" ]]; then
+                row="|[$release_name|$pipeline_url]|$ec_result|$timestamp|"
+            fi
+            failed_details="${failed_details}
+${row}"
 
-                local comment="h2. Release Pipeline Status Update
+        elif [[ "$status" == "Succeeded" ]]; then
+            succeeded_count=$((succeeded_count + 1))
+        fi
+    done < "$release_csv"
 
-Release \`$release_name\` for application \`$app\` is still failing.
+    # --- Pass 2: act on aggregated results ---
 
-||Field||Value||
-|Release|$release_name|
-|Application|$app|
-|Status|$status|
-|EC Result|$ec_result|
-|Timestamp|$timestamp|"
+    # JQL used for both searching and auto-closing (one JIRA per app)
+    local app_jql="project=$JIRA_PROJECT AND summary~\"Release pipeline failures\" AND summary~\"[$app_name]\" AND labels=release-failure AND labels=auto-created AND status NOT IN (Closed,Done,Resolved)"
 
-                if [[ -n "$pipeline_url" && "$pipeline_url" != "null" ]]; then
-                    comment="$comment
-|Pipeline Run|[$release_name Pipeline|$pipeline_url]|"
-                fi
+    if [[ "$failed_count" -gt 0 ]]; then
+        info "Found $failed_count failed releases (out of $release_count) for $app_name"
 
-                if [[ "$DRY_RUN" == true ]]; then
-                    warn "[DRY RUN] Would update release issue $existing_key"
-                else
-                    jira_add_comment "$existing_key" "$comment" || true
-                fi
-                updated_count=$((updated_count + 1))
+        # Check for existing open release failure JIRA for this app
+        local existing_issues=""
+        existing_issues=$(jira_search_issues "$app_jql" 2>/dev/null)
+
+        if [[ -n "$existing_issues" ]]; then
+            # --- Update existing issue with a comment ---
+            local existing_key
+            existing_key=$(echo "$existing_issues" | head -n 1 | awk '{print $1}' | xargs)
+            warn "Found existing release failure issue $existing_key for $app_name - adding update comment"
+
+            local comment="h2. Release Pipeline Status Update
+
+Application \`$app_name\` still has *$failed_count* failing release(s) out of the most recent $release_count.
+
+||Release||EC Result||Timestamp||${failed_details}
+
+_Scanned at $(date -u '+%Y-%m-%d %H:%M UTC')_"
+
+            if [[ "$DRY_RUN" == true ]]; then
+                warn "[DRY RUN] Would update release issue $existing_key with $failed_count failures"
             else
-                # Create new release failure JIRA
-                local summary="[$app] Release pipeline failure - $release_name"
-                local description="h2. Release Pipeline Failure
+                jira_add_comment "$existing_key" "$comment" || true
+            fi
+            updated_count=1
+        else
+            # --- Create a single new JIRA for this app ---
+            local summary="[$app_name] Release pipeline failures ($failed_count)"
+            local description="h2. Release Pipeline Failures
 
-*Release:* \`$release_name\`
-*Application:* \`$app\`
-*Status:* $status
-*EC Result:* $ec_result
-*Timestamp:* $timestamp
+*Application:* \`$app_name\`
+*Failed releases:* $failed_count / $release_count (most recent)
 
-h3. Details
+h3. Failed Releases
 
-The release pipeline for application \`$app\` has failed. This may indicate issues with:
-* Enterprise Contract validation
-* Image signing or promotion
-* Release pipeline configuration
+||Release||EC Result||Timestamp||${failed_details}
+
+h3. Possible Causes
+
+* A specific ReleasePlan (e.g. community publish) is misconfigured
+* Image signing or promotion pipeline error
+* Transient infrastructure failure in the release tenant
 
 h3. Required Actions
 
+* Identify which ReleasePlan is failing (compare failed vs succeeded releases from the same Snapshot)
 * Check the release pipeline run logs for errors
-* Verify Enterprise Contract compliance
-* Check if the snapshot used for the release is valid"
+* Verify ReleasePlan configuration in \`konflux-release-data\`
 
-                if [[ -n "$pipeline_url" && "$pipeline_url" != "null" ]]; then
-                    description="$description
+_Scanned at $(date -u '+%Y-%m-%d %H:%M UTC')_"
 
-h3. Pipeline Run Link
+            local all_labels="konflux,release,release-failure,auto-created"
 
-* [Release Pipeline Run|$pipeline_url]"
+            if [[ "$DRY_RUN" == true ]]; then
+                warn "[DRY RUN] Would create release failure issue:"
+                info "Summary: $summary"
+                info "Failed releases: ${failed_releases[*]}"
+                info "Labels: $all_labels"
+            else
+                local desc_file
+                desc_file=$(mktemp)
+                echo "$description" > "$desc_file"
+
+                # Derive version from app name
+                local release_version
+                release_version=$(get_affects_version "$app_name")
+
+                local -a release_jira_args=(
+                    "issue" "create"
+                    "--project" "$JIRA_PROJECT"
+                    "--type" "Bug"
+                    "--priority" "Critical"
+                    "--summary" "$summary"
+                    "--template" "$desc_file"
+                    "--custom" "activity-type=$JIRA_ACTIVITY_TYPE"
+                    "--custom" "severity=$JIRA_SEVERITY"
+                    "--no-input"
+                )
+
+                # Add version info
+                if [[ -n "$release_version" ]]; then
+                    release_jira_args+=("--affects-version" "$release_version")
+                    release_jira_args+=("--fix-version" "$release_version")
                 fi
 
-                local all_labels="konflux,release,release-failure,auto-created"
+                # Set component and assignee for release issues
+                release_jira_args+=("--component" "${RELEASE_JIRA_COMPONENT:-ACM Architecture}")
+                release_jira_args+=("--assignee" "${RELEASE_JIRA_ASSIGNEE:-gparvin@redhat.com}")
 
-                if [[ "$DRY_RUN" == true ]]; then
-                    warn "[DRY RUN] Would create release failure issue:"
-                    info "Summary: $summary"
-                    info "Labels: $all_labels"
+                # Add labels
+                IFS=',' read -ra RLABEL_ARRAY <<< "$all_labels"
+                for rlabel in "${RLABEL_ARRAY[@]}"; do
+                    rlabel=$(echo "$rlabel" | xargs)
+                    if [[ -n "$rlabel" ]]; then
+                        release_jira_args+=("--label" "$rlabel")
+                    fi
+                done
+
+                local output
+                output=$(jira "${release_jira_args[@]}" < /dev/null 2>&1) || true
+                local issue_key
+                issue_key=$(echo "$output" | grep -oE '[A-Z]+-[0-9]+' | head -n 1)
+
+                rm -f "$desc_file"
+
+                if [[ -n "$issue_key" ]]; then
+                    local jira_url
+                    jira_url=$(get_jira_server_url)
+                    success "Created release failure issue $issue_key: $jira_url/browse/$issue_key"
+                    ALL_CREATED_ISSUES+=("[$app_name] release-failures:$issue_key")
+                    GLOBAL_CREATED_COUNT=$((GLOBAL_CREATED_COUNT + 1))
+                    created_count=1
                 else
-                    local desc_file
-                    desc_file=$(mktemp)
-                    echo "$description" > "$desc_file"
-
-                    # Derive version from app name in CSV
-                    local release_version
-                    release_version=$(get_affects_version "$app")
-
-                    local -a release_jira_args=(
-                        "issue" "create"
-                        "--project" "$JIRA_PROJECT"
-                        "--type" "Bug"
-                        "--priority" "Critical"
-                        "--summary" "$summary"
-                        "--template" "$desc_file"
-                        "--custom" "activity-type=$JIRA_ACTIVITY_TYPE"
-                        "--custom" "severity=$JIRA_SEVERITY"
-                        "--no-input"
-                    )
-
-                    # Add version info
-                    if [[ -n "$release_version" ]]; then
-                        release_jira_args+=("--affects-version" "$release_version")
-                        release_jira_args+=("--fix-version" "$release_version")
-                    fi
-
-                    # Set component and assignee for release issues
-                    release_jira_args+=("--component" "${RELEASE_JIRA_COMPONENT:-ACM Architecture}")
-                    release_jira_args+=("--assignee" "${RELEASE_JIRA_ASSIGNEE:-gparvin@redhat.com}")
-
-                    # Add labels
-                    IFS=',' read -ra RLABEL_ARRAY <<< "$all_labels"
-                    for rlabel in "${RLABEL_ARRAY[@]}"; do
-                        rlabel=$(echo "$rlabel" | xargs)
-                        if [[ -n "$rlabel" ]]; then
-                            release_jira_args+=("--label" "$rlabel")
-                        fi
-                    done
-
-                    local output
-                    output=$(jira "${release_jira_args[@]}" < /dev/null 2>&1) || true
-                    local issue_key
-                    issue_key=$(echo "$output" | grep -oE '[A-Z]+-[0-9]+' | head -n 1)
-
-                    rm -f "$desc_file"
-
-                    if [[ -n "$issue_key" ]]; then
-                        local jira_url
-                        jira_url=$(get_jira_server_url)
-                        success "Created release failure issue $issue_key: $jira_url/browse/$issue_key"
-                        ALL_CREATED_ISSUES+=("[$app] release:$release_name:$issue_key")
-                        GLOBAL_CREATED_COUNT=$((GLOBAL_CREATED_COUNT + 1))
-                        created_count=$((created_count + 1))
-                    else
-                        echo -e "${RED}Failed to create release failure issue for $release_name: $output${NC}" >&2
-                    fi
+                    echo -e "${RED}Failed to create release failure issue for $app_name: $output${NC}" >&2
                 fi
             fi
-
-        elif [[ "$status" == "Succeeded" ]]; then
-            # Auto-close any open release failure JIRAs for this specific release
-            if [[ "$AUTO_CLOSE" == true ]]; then
-                local close_jql="project=$JIRA_PROJECT AND summary~\"Release pipeline failure - $release_name\" AND labels=release-failure AND labels=auto-created AND status NOT IN (Closed,Done,Resolved)"
-                local open_release_issues=""
-                open_release_issues=$(jira_search_issues "$close_jql" 2>/dev/null)
-
-                if [[ -n "$open_release_issues" ]]; then
-                    while IFS= read -r release_issue_key; do
-                        release_issue_key=$(echo "$release_issue_key" | awk '{print $1}' | xargs)
-                        if [[ -n "$release_issue_key" ]]; then
-                            local close_comment="Release pipeline for application \`$app\` has succeeded (release: \`$release_name\`).
-
-Auto-closing this release failure issue as the pipeline is now passing."
-
-                            if [[ "$DRY_RUN" == true ]]; then
-                                warn "[DRY RUN] Would close release issue $release_issue_key"
-                            else
-                                jira_add_comment "$release_issue_key" "$close_comment" || true
-                                jira_add_labels "$release_issue_key" "auto-closed" >/dev/null 2>&1 || true
-                                if jira_transition_issue "$release_issue_key" "Closed"; then
-                                    success "Closed release failure issue $release_issue_key (release succeeded)"
-                                    ALL_CLOSED_ISSUES+=("release:$release_name:$release_issue_key")
-                                fi
-                            fi
-                            closed_count=$((closed_count + 1))
-                        fi
-                    done <<< "$open_release_issues"
-                fi
-            fi
-            skipped_count=$((skipped_count + 1))
-        else
-            # InProgress or Unknown - skip
-            skipped_count=$((skipped_count + 1))
         fi
 
-    done < "$release_csv"
+    elif [[ "$succeeded_count" -gt 0 && "$failed_count" -eq 0 ]]; then
+        # All releases succeeded — auto-close any open failure JIRA for this app
+        if [[ "$AUTO_CLOSE" == true ]]; then
+            local open_release_issues=""
+            open_release_issues=$(jira_search_issues "$app_jql" 2>/dev/null)
+
+            if [[ -n "$open_release_issues" ]]; then
+                while IFS= read -r release_issue_key; do
+                    release_issue_key=$(echo "$release_issue_key" | awk '{print $1}' | xargs)
+                    if [[ -n "$release_issue_key" ]]; then
+                        local close_comment="All recent release pipelines for application \`$app_name\` are now succeeding ($succeeded_count/$release_count passed).
+
+Auto-closing this release failure issue."
+
+                        if [[ "$DRY_RUN" == true ]]; then
+                            warn "[DRY RUN] Would close release issue $release_issue_key (all releases passing)"
+                        else
+                            jira_add_comment "$release_issue_key" "$close_comment" || true
+                            jira_add_labels "$release_issue_key" "auto-closed" >/dev/null 2>&1 || true
+                            if jira_transition_issue "$release_issue_key" "Closed"; then
+                                success "Closed release failure issue $release_issue_key (all releases passing for $app_name)"
+                                ALL_CLOSED_ISSUES+=("release:$app_name:$release_issue_key")
+                            fi
+                        fi
+                        closed_count=$((closed_count + 1))
+                    fi
+                done <<< "$open_release_issues"
+            fi
+        fi
+    fi
 
     # Print release JIRA summary
     echo ""
-    info "Release Pipeline JIRA Summary:"
-    echo "  Releases processed: $release_count" >&2
+    info "Release Pipeline JIRA Summary for $app_name:"
+    echo "  Releases processed: $release_count (failed: $failed_count, succeeded: $succeeded_count)" >&2
     echo -e "  ${GREEN}Issues created:${NC} $created_count" >&2
     echo -e "  ${YELLOW}Issues updated:${NC} $updated_count" >&2
     echo -e "  ${BLUE}Issues closed:${NC} $closed_count" >&2
-    echo -e "  Skipped: $skipped_count" >&2
     echo ""
 }
 
