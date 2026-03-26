@@ -38,7 +38,7 @@ Add the following secrets:
 The workflow is already configured in [.github/workflows/konflux-compliance-scanner.yml](../../.github/workflows/konflux-compliance-scanner.yml)
 
 It will automatically run:
-- **Every 15 minutes** - Fast scan (Push, EC, Promotion checks only)
+- **Every hour** - Fast scan (Push, EC, Promotion checks only)
 - **Sunday 8:00 AM EST** (13:00 UTC) - Full scan (all 5 compliance dimensions)
 
 ### 3. Manual Testing
@@ -125,7 +125,7 @@ To change the schedule, edit the cron expression:
 ```yaml
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Fast scan every 15 min
+    - cron: '0 * * * *'     # Fast scan every hour
     - cron: '0 13 * * 0'    # Full scan Sunday 8AM EST
 
     # Examples:
@@ -155,7 +155,7 @@ env:
 ```
 ┌─────────────────────────────────────────────────────────┐
 │            GitHub Actions Scheduled Workflow             │
-│     (Fast: every 15min / Full: Sunday 8AM EST)          │
+│     (Fast: every hour / Full: Sunday 8AM EST)          │
 └────────────────────┬────────────────────────────────────┘
                      │
                      ▼
@@ -415,7 +415,7 @@ konflux/konflux-jira-integration/scripts/
 
 ### v3.0.0 (2026-03-24)
 - Smart denoising: retrigger + wait + re-check before creating JIRA (fixes #22)
-- Tiered scanning: fast mode (15min, Push/EC/Promotion) + full mode (weekly, all 5 dimensions)
+- Tiered scanning: fast mode (hourly, Push/EC/Promotion) + full mode (weekly, all 5 dimensions)
 - Release pipeline tracking via JIRA issues (Component: ACM Architecture, Assignee: Gus Parvin)
 - Pending state persistence via GitHub Actions cache
 - Concurrency control to prevent overlapping scan runs

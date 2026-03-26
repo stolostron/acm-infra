@@ -2,7 +2,7 @@ name: Konflux Compliance Scanner
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Every 15 minutes - fast scan
+    - cron: '0 * * * *'     # Every hour - fast scan
     - cron: '0 13 * * 0'    # Sunday 8AM EST (13:00 UTC) - full scan
 
   pull_request:
@@ -63,8 +63,8 @@ env:
   JIRA_CLI_VERSION: "1.7.0"
   CACHE_VERSION: "v1"
   # Determine scan mode: manual input > schedule-based > default
-  # '*/15 * * * *' schedule = fast scan, '0 13 * * 0' schedule = full scan
-  SCAN_MODE: ${{ github.event.inputs.scan_mode || (github.event.schedule == '*/15 * * * *' && 'fast') || 'full' }}
+  # '0 * * * *' schedule = fast scan, '0 13 * * 0' schedule = full scan
+  SCAN_MODE: ${{ github.event.inputs.scan_mode || (github.event.schedule == '0 * * * *' && 'fast') || 'full' }}
   RETRIGGER_WAIT_MINUTES: ${{ github.event.inputs.retrigger_wait_minutes || '60' }}
 
 jobs:
