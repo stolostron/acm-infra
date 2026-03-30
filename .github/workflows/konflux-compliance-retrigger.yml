@@ -28,6 +28,7 @@ on:
         required: false
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   KUBECTL_VERSION: "1.31.0"
   OC_VERSION: "4.17.8"
   YQ_VERSION: "4.44.3"
@@ -185,7 +186,7 @@ jobs:
       - name: Generate GitHub App Token
         id: app-token
         if: steps.should_run.outputs.skip != 'true'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
