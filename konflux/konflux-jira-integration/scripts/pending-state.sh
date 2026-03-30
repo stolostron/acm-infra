@@ -17,6 +17,14 @@ PENDING_FILE="${PENDING_FILE:-pending-failures.json}"
 # This allows the retriggered build enough time to complete.
 RETRIGGER_WAIT_MINUTES="${RETRIGGER_WAIT_MINUTES:-60}"
 
+# Number of retrigger attempts required before confirming a failure (default: 2)
+# With default value of 2, the flow is:
+#   Scan 1: fail -> retrigger #1 (count=0)
+#   Scan 2: fail -> retrigger #2 (count=1)
+#   Scan 3: fail -> retrigger #3 (count=2)
+#   Scan 4: fail -> count=2 >= 2 -> CONFIRMED -> create JIRA
+CONFIRMED_FAILURE_THRESHOLD="${CONFIRMED_FAILURE_THRESHOLD:-2}"
+
 # Stale entry cleanup threshold in hours (default: 48)
 PENDING_STALE_HOURS="${PENDING_STALE_HOURS:-48}"
 
@@ -145,15 +153,16 @@ is_ready_for_recheck() {
     fi
 }
 
-# Check if component is a confirmed failure (retriggered at least once and ready for recheck)
+# Check if component is a confirmed failure (retriggered enough times and ready for recheck)
 # Args: component_name
-# Returns: 0 if confirmed (retrigger_count >= 1 AND enough time elapsed), 1 if still pending
+# Returns: 0 if confirmed (retrigger_count >= CONFIRMED_FAILURE_THRESHOLD AND enough time elapsed), 1 if still pending
 is_confirmed_failure() {
     local component="$1"
     local retrigger_count
     retrigger_count=$(get_retrigger_count "$component")
+    local threshold="${CONFIRMED_FAILURE_THRESHOLD:-2}"
 
-    if [[ "$retrigger_count" -ge 1 ]] && is_ready_for_recheck "$component"; then
+    if [[ "$retrigger_count" -ge "$threshold" ]] && is_ready_for_recheck "$component"; then
         return 0  # Confirmed failure
     fi
 

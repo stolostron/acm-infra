@@ -147,28 +147,50 @@ echo "=== Test 8: is_confirmed_failure ==="
 # ============================================================
 
 export RETRIGGER_WAIT_MINUTES=0
+export CONFIRMED_FAILURE_THRESHOLD=2
 
-# fresh-component has retrigger_count=0 (never incremented)
-assert_exit_code "retrigger_count=0 is NOT confirmed" 1 is_confirmed_failure "fresh-component"
+# Reset state for confirmed failure tests
+echo '{}' > "$PENDING_FILE"
+add_to_pending "test-confirm" "acm-217" "push"
 
-# Increment and check
-increment_retrigger "fresh-component"
-assert_exit_code "retrigger_count=1 + ready = confirmed" 0 is_confirmed_failure "fresh-component"
+# retrigger_count=0, threshold=2 -> NOT confirmed
+assert_exit_code "retrigger_count=0 < threshold=2 is NOT confirmed" 1 is_confirmed_failure "test-confirm"
 
-# Not ready even with retrigger_count >= 1
+# Increment to 1 -> still NOT confirmed
+increment_retrigger "test-confirm"
+assert_exit_code "retrigger_count=1 < threshold=2 is NOT confirmed" 1 is_confirmed_failure "test-confirm"
+
+# Increment to 2 -> NOW confirmed (>= threshold)
+increment_retrigger "test-confirm"
+assert_exit_code "retrigger_count=2 >= threshold=2 is confirmed" 0 is_confirmed_failure "test-confirm"
+
+# Test with threshold=3
+export CONFIRMED_FAILURE_THRESHOLD=3
+assert_exit_code "retrigger_count=2 < threshold=3 is NOT confirmed" 1 is_confirmed_failure "test-confirm"
+increment_retrigger "test-confirm"
+assert_exit_code "retrigger_count=3 >= threshold=3 is confirmed" 0 is_confirmed_failure "test-confirm"
+
+# Not ready even with count >= threshold
 export RETRIGGER_WAIT_MINUTES=9999
-# Re-set retrigger_time to now
-increment_retrigger "fresh-component"
-assert_exit_code "retrigger_count=2 but not ready = NOT confirmed" 1 is_confirmed_failure "fresh-component"
+increment_retrigger "test-confirm"
+assert_exit_code "count=4 >= threshold but not ready = NOT confirmed" 1 is_confirmed_failure "test-confirm"
+
+# Reset for remaining tests
+export CONFIRMED_FAILURE_THRESHOLD=2
+export RETRIGGER_WAIT_MINUTES=0
 
 # ============================================================
 echo ""
 echo "=== Test 9: remove_from_pending ==="
 # ============================================================
 
-remove_from_pending "console-acm-217"
-assert_exit_code "removed component is NOT pending" 1 is_pending "console-acm-217"
-assert_exit_code "other component still pending" 0 is_pending "fresh-component"
+# Set up fresh state for remove test
+echo '{}' > "$PENDING_FILE"
+add_to_pending "comp-a" "acm-217" "push"
+add_to_pending "comp-b" "acm-217" "ec"
+remove_from_pending "comp-a"
+assert_exit_code "removed component is NOT pending" 1 is_pending "comp-a"
+assert_exit_code "other component still pending" 0 is_pending "comp-b"
 
 # ============================================================
 echo ""
@@ -196,7 +218,7 @@ if [[ -n "$old_time" ]]; then
 
     cleanup_stale_pending 2>/dev/null
     assert_exit_code "stale component (72h) removed" 1 is_pending "search-acm-217"
-    assert_exit_code "fresh component still pending" 0 is_pending "fresh-component"
+    assert_exit_code "fresh component still pending" 0 is_pending "comp-b"
 else
     echo "  SKIP: could not compute old timestamp on this platform"
 fi

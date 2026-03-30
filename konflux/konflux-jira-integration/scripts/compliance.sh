@@ -1092,13 +1092,16 @@ for line in $components; do
                 echo "PENDING (waiting): $line - waiting for retrigger to complete (< ${wait_mins}min elapsed)" >&3
                 echo "$line,$SCAN_TIME,$data" >> "$pendingcsvfile"
             elif is_confirmed_failure "$line"; then
-                # Confirmed failure: retriggered at least once and enough time has passed, still failing
-                echo "CONFIRMED FAILURE: $line - writing to compliance CSV for JIRA creation" >&3
+                # Confirmed failure: retriggered >= CONFIRMED_FAILURE_THRESHOLD times, still failing
+                retrigger_count_val=$(get_retrigger_count "$line")
+                echo "CONFIRMED FAILURE: $line - failed after $retrigger_count_val retrigger(s), writing to compliance CSV" >&3
                 echo "$line,$SCAN_TIME,$data" >> "$compliancefile"
                 remove_from_pending "$line"
             else
-                # Pending, ready for recheck, but retrigger_count is 0 - retrigger again and increment
-                echo "PENDING (retrigger #2): $line - retriggering again" >&3
+                # Pending, ready for recheck, but retrigger_count < threshold - retrigger again
+                retrigger_count_val=$(get_retrigger_count "$line")
+                next_count=$((retrigger_count_val + 1))
+                echo "PENDING (retrigger #$next_count): $line - retriggering again (need ${CONFIRMED_FAILURE_THRESHOLD:-2} retriggers to confirm)" >&3
                 increment_retrigger "$line"
                 if kubectl annotate components/$line build.appstudio.openshift.io/request=trigger-pac-build --overwrite 2>/dev/null; then
                     echo "  Retriggered $line successfully" >&3
