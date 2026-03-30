@@ -32,6 +32,7 @@ on:
         required: false
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   JIRA_SERVER: "https://redhat.atlassian.net"
   JIRA_PROJECT: "ACM"
   JIRA_AUTH_TYPE: "basic"
@@ -213,7 +214,7 @@ jobs:
       - name: Generate GitHub App Token
         id: app-token
         if: steps.should_run.outputs.skip != 'true'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
