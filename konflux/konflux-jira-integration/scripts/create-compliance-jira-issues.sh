@@ -2095,5 +2095,7 @@ main() {
     fi
 }
 
-# Run main function
-main "$@"
+# Run main function only when executed directly, not when sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
