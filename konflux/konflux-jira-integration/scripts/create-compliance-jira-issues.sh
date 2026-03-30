@@ -1896,7 +1896,7 @@ h3. Required Actions
 
 _Scanned at $(date -u '+%Y-%m-%d %H:%M UTC')_"
 
-            local all_labels="konflux,release,release-failure,auto-created"
+            local all_labels="konflux,compliance,release,release-failure,auto-created"
 
             if [[ "$DRY_RUN" == true ]]; then
                 warn "[DRY RUN] Would create release failure issue:"
