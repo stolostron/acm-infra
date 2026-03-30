@@ -126,9 +126,10 @@ is_ready_for_recheck() {
     local retrigger_epoch=""
 
     # Try GNU date first (Linux), then BSD date (macOS)
-    if retrigger_epoch=$(date -d "$retrigger_time_clean" +%s 2>/dev/null); then
+    # Use -u flag to parse as UTC (timestamps are stored in UTC)
+    if retrigger_epoch=$(date -u -d "$retrigger_time_clean" +%s 2>/dev/null); then
         : # success
-    elif retrigger_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$retrigger_time_clean" +%s 2>/dev/null); then
+    elif retrigger_epoch=$(date -u -j -f "%Y-%m-%dT%H:%M:%S" "$retrigger_time_clean" +%s 2>/dev/null); then
         : # success
     else
         echo "[pending-state] Warning: Could not parse retrigger_time '$retrigger_time', treating as ready" >&2
@@ -181,9 +182,9 @@ cleanup_stale_pending() {
         local first_seen_clean="${first_seen%Z}"
         local first_seen_epoch=""
 
-        if first_seen_epoch=$(date -d "$first_seen_clean" +%s 2>/dev/null); then
+        if first_seen_epoch=$(date -u -d "$first_seen_clean" +%s 2>/dev/null); then
             : # success
-        elif first_seen_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$first_seen_clean" +%s 2>/dev/null); then
+        elif first_seen_epoch=$(date -u -j -f "%Y-%m-%dT%H:%M:%S" "$first_seen_clean" +%s 2>/dev/null); then
             : # success
         else
             continue
