@@ -2,8 +2,8 @@ name: Konflux Compliance Scanner
 
 on:
   schedule:
-    # Run at 8:00 AM EST (13:00 UTC), every Sunday
-    - cron: '0 13 * * 0'
+    - cron: '0 * * * *'     # Every hour - fast scan
+    - cron: '0 13 * * 0'    # Sunday 8AM EST (13:00 UTC) - full scan
 
   pull_request:
     branches:
@@ -30,6 +30,22 @@ on:
       squad_filter:
         description: 'Filter by squad (optional)'
         required: false
+      scan_mode:
+        description: 'Scan mode: fast (push/ec/promotion only) or full (all 5 dimensions)'
+        required: false
+        default: 'fast'
+        type: choice
+        options:
+          - fast
+          - full
+      retrigger_wait_minutes:
+        description: 'Minutes to wait after retrigger before re-checking (default: 60)'
+        required: false
+        default: '60'
+
+concurrency:
+  group: compliance-scan-${{ github.event_name }}
+  cancel-in-progress: true
 
 env:
   JIRA_SERVER: "https://redhat.atlassian.net"
@@ -46,6 +62,10 @@ env:
   YQ_VERSION: "4.44.3"
   JIRA_CLI_VERSION: "1.7.0"
   CACHE_VERSION: "v1"
+  # Determine scan mode: manual input > schedule-based > default
+  # '0 * * * *' schedule = fast scan, '0 13 * * 0' schedule = full scan
+  SCAN_MODE: ${{ github.event.inputs.scan_mode || (github.event.schedule == '0 * * * *' && 'fast') || 'full' }}
+  RETRIGGER_WAIT_MINUTES: ${{ github.event.inputs.retrigger_wait_minutes || '60' }}
 
 jobs:
   compliance-scan:
@@ -525,20 +545,41 @@ jobs:
           chmod 600 ${{ github.workspace }}/.env
           echo "✓ JIRA configuration prepared"
 
+      - name: Restore pending state
+        uses: actions/cache/restore@v4
+        if: steps.should_run.outputs.skip != 'true'
+        with:
+          path: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/pending-failures.json
+          key: compliance-pending-state-${{ matrix.application }}
+          restore-keys: |
+            compliance-pending-state-${{ matrix.application }}
+
       - name: Run compliance scan
         if: steps.should_run.outputs.skip != 'true'
         working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
         env:
           SQUAD_FILTER: ${{ github.event.inputs.squad_filter }}
+          RETRIGGER_WAIT_MINUTES: ${{ env.RETRIGGER_WAIT_MINUTES }}
         run: |
           echo "=================================================="
           echo "Running Compliance Scan for ${{ matrix.application }}"
           echo "=================================================="
           echo "Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          echo "Scan mode: ${{ env.SCAN_MODE }}"
+          echo "Retrigger wait: ${RETRIGGER_WAIT_MINUTES} minutes"
           echo ""
 
           # Build compliance command
           COMPLIANCE_CMD="./compliance.sh"
+
+          # Add scan mode flag
+          COMPLIANCE_CMD="$COMPLIANCE_CMD --scan-mode=${{ env.SCAN_MODE }}"
+
+          # Enable smart denoising for scheduled runs
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            COMPLIANCE_CMD="$COMPLIANCE_CMD --enable-denoising"
+            echo "Smart denoising: enabled"
+          fi
 
           if [[ "${{ github.event.inputs.retrigger_failed }}" == "true" ]]; then
             COMPLIANCE_CMD="$COMPLIANCE_CMD --retrigger"
@@ -591,7 +632,14 @@ jobs:
           ls -lah ./data/ || echo "Script data directory is empty or does not exist"
           echo ""
 
-          # Move CSV file to workspace data directory if it exists
+          # Move CSV files to workspace data directory if they exist
+          SCRIPT_PENDING_CSV="./data/${{ matrix.application }}-pending-failures.csv"
+          WORKSPACE_PENDING_CSV="${{ github.workspace }}/data/${{ matrix.application }}-pending-failures.csv"
+          if [[ -f "$SCRIPT_PENDING_CSV" ]]; then
+            mv "$SCRIPT_PENDING_CSV" "$WORKSPACE_PENDING_CSV"
+            echo "✓ Pending failures CSV moved"
+          fi
+
           if [[ -f "$SCRIPT_CSV_FILE" ]]; then
             echo "Moving CSV from $SCRIPT_CSV_FILE to $WORKSPACE_CSV_FILE"
             mv "$SCRIPT_CSV_FILE" "$WORKSPACE_CSV_FILE"
@@ -620,6 +668,13 @@ jobs:
           # Show summary
           TOTAL_COMPONENTS=$(tail -n +2 "$WORKSPACE_CSV_FILE" | wc -l | tr -d ' ')
           echo "Total components scanned: $TOTAL_COMPONENTS"
+
+      - name: Save pending state
+        uses: actions/cache/save@v4
+        if: always() && steps.should_run.outputs.skip != 'true'
+        with:
+          path: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts/pending-failures.json
+          key: compliance-pending-state-${{ matrix.application }}-${{ github.run_id }}
 
       - name: Create/Update JIRA issues
         if: steps.should_run.outputs.skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.create_jira_issues == 'true')
@@ -739,6 +794,7 @@ jobs:
           name: compliance-results-${{ matrix.application }}
           path: |
             ${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv
+            ${{ github.workspace }}/data/${{ matrix.application }}-pending-failures.csv
             ${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv
             ${{ github.workspace }}/logs/${{ matrix.application }}-*.log
             ${{ github.workspace }}/logs/${{ matrix.application }}-*.json
