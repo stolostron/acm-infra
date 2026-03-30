@@ -42,6 +42,10 @@ on:
         description: 'Minutes to wait after retrigger before re-checking (default: 60)'
         required: false
         default: '60'
+      enable_denoising:
+        description: 'Enable smart denoising (retrigger + wait + recheck before creating JIRA)'
+        type: boolean
+        default: false
 
 concurrency:
   group: compliance-scan-${{ github.event_name }}
@@ -575,8 +579,8 @@ jobs:
           # Add scan mode flag
           COMPLIANCE_CMD="$COMPLIANCE_CMD --scan-mode=${{ env.SCAN_MODE }}"
 
-          # Enable smart denoising for scheduled runs
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          # Enable smart denoising for scheduled runs or when explicitly requested
+          if [[ "${{ github.event_name }}" == "schedule" ]] || [[ "${{ github.event.inputs.enable_denoising }}" == "true" ]]; then
             COMPLIANCE_CMD="$COMPLIANCE_CMD --enable-denoising"
             echo "Smart denoising: enabled"
           fi
@@ -668,6 +672,14 @@ jobs:
           # Show summary
           TOTAL_COMPONENTS=$(tail -n +2 "$WORKSPACE_CSV_FILE" | wc -l | tr -d ' ')
           echo "Total components scanned: $TOTAL_COMPONENTS"
+
+      - name: Ensure pending state file exists
+        if: always() && steps.should_run.outputs.skip != 'true'
+        run: |
+          PENDING_FILE="${{ github.workspace }}/konflux/konflux-jira-integration/scripts/pending-failures.json"
+          if [[ ! -f "$PENDING_FILE" ]]; then
+            echo '{}' > "$PENDING_FILE"
+          fi
 
       - name: Save pending state
         uses: actions/cache/save@v4
