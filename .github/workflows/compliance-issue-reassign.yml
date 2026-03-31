@@ -3,9 +3,6 @@ name: Reassign Compliance Issues
 on:
   workflow_dispatch:
     inputs:
-      release:
-        description: 'Filter by affects-version (e.g., 2.13, 2.14). Leave empty for all.'
-        required: false
       application:
         description: 'Filter by application name in summary (e.g., acm-217). Leave empty for all.'
         required: false
@@ -102,17 +99,12 @@ jobs:
           JIRA_USER: ${{ secrets.JIRA_USER }}
           JIRA_SERVER: ${{ env.JIRA_SERVER }}
           INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
-          INPUT_RELEASE: ${{ github.event.inputs.release }}
           INPUT_APPLICATION: ${{ github.event.inputs.application }}
         run: |
           CMD="./reassign-compliance-issues.sh"
 
           if [[ "$INPUT_DRY_RUN" == "true" ]]; then
             CMD="$CMD --dry-run"
-          fi
-
-          if [[ -n "$INPUT_RELEASE" ]]; then
-            CMD="$CMD --release $INPUT_RELEASE"
           fi
 
           if [[ -n "$INPUT_APPLICATION" ]]; then
