@@ -110,7 +110,7 @@ echo "Scan mode: $scan_mode"
 # Initialize pending state for smart denoising if enabled
 enable_denoising="${enable_denoising:-false}"
 if [[ "$enable_denoising" == "true" ]]; then
-    echo "Smart denoising: enabled (wait time: ${RETRIGGER_WAIT_MINUTES:-60} minutes)"
+    echo "Smart denoising: enabled (wait time: ${RETRIGGER_WAIT_MINUTES:-120} minutes)"
     init_pending_state
     cleanup_stale_pending
 fi
@@ -1088,7 +1088,7 @@ for line in $components; do
                 echo "$line,$SCAN_TIME,$data" >> "$pendingcsvfile"
             elif ! is_ready_for_recheck "$line"; then
                 # Pending but not enough time elapsed since retrigger - skip scan, keep in pending CSV
-                wait_mins="${RETRIGGER_WAIT_MINUTES:-60}"
+                wait_mins="${RETRIGGER_WAIT_MINUTES:-120}"
                 echo "PENDING (waiting): $line - waiting for retrigger to complete (< ${wait_mins}min elapsed)" >&3
                 echo "$line,$SCAN_TIME,$data" >> "$pendingcsvfile"
             elif is_confirmed_failure "$line"; then

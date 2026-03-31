@@ -15,7 +15,7 @@ PENDING_FILE="${PENDING_FILE:-pending-failures.json}"
 
 # Minutes to wait after retrigger before re-checking (default: 60)
 # This allows the retriggered build enough time to complete.
-RETRIGGER_WAIT_MINUTES="${RETRIGGER_WAIT_MINUTES:-60}"
+RETRIGGER_WAIT_MINUTES="${RETRIGGER_WAIT_MINUTES:-120}"
 
 # Number of retrigger attempts required before confirming a failure (default: 2)
 # With default value of 2, the flow is:
@@ -125,7 +125,7 @@ is_ready_for_recheck() {
         return 0
     fi
 
-    local wait_minutes="${RETRIGGER_WAIT_MINUTES:-60}"
+    local wait_minutes="${RETRIGGER_WAIT_MINUTES:-120}"
     local now
     now=$(date +%s)
 
