@@ -74,7 +74,7 @@ Each component follows this state machine during scans:
 
 ### Timeline Example
 
-With default settings (`RETRIGGER_WAIT_MINUTES=60`, `CONFIRMED_FAILURE_THRESHOLD=2`):
+With default settings (`RETRIGGER_WAIT_MINUTES=120`, `CONFIRMED_FAILURE_THRESHOLD=2`):
 
 ```
 T=0min    Scan detects failure in component "console-acm"
@@ -82,18 +82,18 @@ T=0min    Scan detects failure in component "console-acm"
           → Add to pending state: {retrigger_time: T0, retrigger_count: 0}
           → Do NOT create JIRA
 
-T=60min   Next scan runs, "console-acm" is in pending state
-          → 60 min >= 60 min wait → ready for recheck
+T=120min  Next scan runs, "console-acm" is in pending state
+          → 120 min >= 120 min wait → ready for recheck
           → retrigger_count=0 < threshold=2 → retrigger build #2, increment to 1
           → Still waiting
 
-T=120min  Next scan runs, "console-acm" still in pending state
-          → 60 min >= 60 min wait → ready for recheck
+T=240min  Next scan runs, "console-acm" still in pending state
+          → 120 min >= 120 min wait → ready for recheck
           → retrigger_count=1 < threshold=2 → retrigger build #3, increment to 2
           → Still waiting
 
-T=180min  Next scan runs, "console-acm" still in pending state
-          → 60 min >= 60 min wait → ready for recheck
+T=360min  Next scan runs, "console-acm" still in pending state
+          → 120 min >= 120 min wait → ready for recheck
           → retrigger_count=2 >= threshold=2 → check current status:
 
           Scenario A: Build now passes
@@ -101,7 +101,7 @@ T=180min  Next scan runs, "console-acm" still in pending state
           → No JIRA created (false alarm filtered)
 
           Scenario B: Build still fails
-          → Confirmed failure (failed 3 retrigger attempts)
+          → Confirmed failure (failed 3 retrigger attempts over 6 hours)
           → Write to compliance CSV
           → JIRA will be created by create-compliance-jira-issues.sh
 ```
@@ -121,9 +121,9 @@ T=180min  Next scan runs, "console-acm" still in pending state
 | Time | Event | JIRA |
 |------|-------|------|
 | T=0 | Scanner detects failure | Retrigger #1 + pending state. No JIRA. |
-| T=60min | Still failing | Retrigger #2. No JIRA. |
-| T=120min | Still failing | Retrigger #3. No JIRA. |
-| T=180min | Build passed after 3rd retrigger | Removed from pending. No JIRA. |
+| T=120min | Still failing | Retrigger #2. No JIRA. |
+| T=240min | Still failing | Retrigger #3. No JIRA. |
+| T=360min (6h) | Build passed after 3rd retrigger | Removed from pending. No JIRA. |
 | Result | Developer never bothered | Zero noise |
 
 ## Tiered Scanning
@@ -158,7 +158,7 @@ When triggering the scanner manually via GitHub Actions, these inputs control de
 |-------|------|---------|-------------|
 | `scan_mode` | choice | `fast` | `fast` (Push/EC/Promotion only) or `full` (all 5 dimensions) |
 | `enable_denoising` | boolean | `false` | Enable smart denoising for this run. Automatically enabled for scheduled runs. |
-| `retrigger_wait_minutes` | string | `60` | Minutes to wait after retrigger before re-checking the component |
+| `retrigger_wait_minutes` | string | `120` | Minutes to wait after retrigger before re-checking the component |
 | `retrigger_failed` | boolean | `false` | Retrigger failed builds (required for denoising to take action) |
 | `create_jira_issues` | boolean | `true` | Create JIRA issues for confirmed failures |
 
@@ -168,7 +168,7 @@ These can be set in the workflow YAML or passed to `compliance.sh` directly:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RETRIGGER_WAIT_MINUTES` | `60` | Minutes to wait after each retrigger before re-checking |
+| `RETRIGGER_WAIT_MINUTES` | `120` | Minutes to wait after each retrigger before re-checking |
 | `CONFIRMED_FAILURE_THRESHOLD` | `2` | Number of retrigger attempts required before confirming a failure. With default `2`, a component must fail across 3 retrigger cycles before a JIRA is created. |
 | `PENDING_STALE_HOURS` | `48` | Automatically remove pending entries older than this (safety cleanup) |
 | `PENDING_FILE` | `pending-failures.json` | Path to the pending state JSON file |

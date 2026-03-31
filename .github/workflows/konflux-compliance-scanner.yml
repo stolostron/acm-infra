@@ -39,9 +39,9 @@ on:
           - fast
           - full
       retrigger_wait_minutes:
-        description: 'Minutes to wait after retrigger before re-checking (default: 60)'
+        description: 'Minutes to wait after retrigger before re-checking (default: 120)'
         required: false
-        default: '60'
+        default: '120'
       enable_denoising:
         description: 'Enable smart denoising (retrigger + wait + recheck before creating JIRA)'
         type: boolean
@@ -70,7 +70,7 @@ env:
   # Determine scan mode: manual input > schedule-based > default
   # '0 * * * *' schedule = fast scan, '0 13 * * 0' schedule = full scan
   SCAN_MODE: ${{ github.event.inputs.scan_mode || (github.event.schedule == '0 * * * *' && 'fast') || 'full' }}
-  RETRIGGER_WAIT_MINUTES: ${{ github.event.inputs.retrigger_wait_minutes || '60' }}
+  RETRIGGER_WAIT_MINUTES: ${{ github.event.inputs.retrigger_wait_minutes || '120' }}
 
 jobs:
   compliance-scan:
