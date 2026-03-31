@@ -3,7 +3,7 @@
 # to the correct squad component based on component-registry.yaml.
 #
 # Usage:
-#   reassign-compliance-issues.sh [--dry-run] [--release <version>] [--app <app_name>]
+#   reassign-compliance-issues.sh [--dry-run] [--app <app_name>]
 #
 # The script:
 #   1. Queries JIRA for open compliance issues with component "ACM Architecture"
@@ -27,7 +27,6 @@ JIRA_PROJECT="${JIRA_PROJECT:-ACM}"
 JIRA_SERVER="${JIRA_SERVER:-https://redhat.atlassian.net}"
 TRIAGE_COMPONENT="${COMPLIANCE_JIRA_COMPONENT:-ACM Architecture}"
 DRY_RUN=false
-RELEASE_FILTER=""
 APP_FILTER=""
 
 # Colors
@@ -50,13 +49,11 @@ Reassign compliance JIRA issues from the triage queue to the correct squad.
 
 Options:
   --dry-run              Show what would be changed without making updates
-  --release <version>    Filter issues by affects-version (e.g., 2.13, 2.14)
   --app <app_name>       Filter issues by application name in summary (e.g., acm-217)
   -h, --help             Show this help message
 
 Examples:
   $(basename "$0") --dry-run
-  $(basename "$0") --release 2.13
   $(basename "$0") --app acm-217 --dry-run
 EOF
     exit 0
@@ -66,7 +63,6 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run)    DRY_RUN=true; shift ;;
-        --release)    RELEASE_FILTER="$2"; shift 2 ;;
         --app)        APP_FILTER="$2"; shift 2 ;;
         -h|--help)    usage ;;
         *)            error "Unknown option: $1"; usage ;;
@@ -113,11 +109,6 @@ main() {
 
     # Build JQL query
     local jql="project=$JIRA_PROJECT AND labels=compliance AND labels=auto-created AND component=\"$TRIAGE_COMPONENT\" AND status NOT IN (Closed,Done,Resolved)"
-
-    if [[ -n "$RELEASE_FILTER" ]]; then
-        jql="$jql AND affectedVersion=\"$RELEASE_FILTER\""
-        info "Filtering by release: $RELEASE_FILTER"
-    fi
 
     if [[ -n "$APP_FILTER" ]]; then
         jql="$jql AND summary~\"[$APP_FILTER]\""
