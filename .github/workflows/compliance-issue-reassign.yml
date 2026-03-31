@@ -1,0 +1,123 @@
+name: Reassign Compliance Issues
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Filter by affects-version (e.g., 2.13, 2.14). Leave empty for all.'
+        required: false
+      application:
+        description: 'Filter by application name in summary (e.g., acm-217). Leave empty for all.'
+        required: false
+      dry_run:
+        description: 'Dry run - show changes without updating JIRA'
+        type: boolean
+        default: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  JIRA_SERVER: "https://redhat.atlassian.net"
+  JIRA_PROJECT: "ACM"
+  JIRA_AUTH_TYPE: "basic"
+  JIRA_INSTALLATION: "Cloud"
+  JIRA_BOARD: "None"
+  JIRA_CLI_VERSION: "1.7.0"
+  YQ_VERSION: "4.44.3"
+
+jobs:
+  reassign:
+    name: Reassign compliance issues
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Cache tools
+        id: cache-tools
+        uses: actions/cache@v4
+        with:
+          path: /tmp/acm-tools
+          key: acm-tools-jira-${{ env.JIRA_CLI_VERSION }}-yq-${{ env.YQ_VERSION }}
+
+      - name: Install required tools
+        run: |
+          TOOL_DIR="/tmp/acm-tools"
+
+          if [[ "${{ steps.cache-tools.outputs.cache-hit }}" == "true" ]]; then
+            echo "Restoring tools from cache..."
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/yq" /usr/local/bin/yq
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/jira" /usr/local/bin/jira
+          else
+            echo "Cache miss - downloading tools..."
+            mkdir -p "$TOOL_DIR"
+
+            echo "Installing yq..."
+            curl -L --retry 3 --retry-delay 2 --fail \
+              -o "$TOOL_DIR/yq" \
+              "https://github.com/mikefarah/yq/releases/download/v${{ env.YQ_VERSION }}/yq_linux_amd64"
+            chmod +x "$TOOL_DIR/yq"
+
+            echo "Installing jira-cli..."
+            curl -L --retry 3 --retry-delay 2 --fail \
+              -o /tmp/jira.tar.gz \
+              "https://github.com/ankitpokhrel/jira-cli/releases/download/v${{ env.JIRA_CLI_VERSION }}/jira_${{ env.JIRA_CLI_VERSION }}_linux_x86_64.tar.gz"
+            tar -xzf /tmp/jira.tar.gz -C /tmp
+            find /tmp/jira_* -name "jira" -type f -executable -exec mv {} "$TOOL_DIR/jira" \; -quit 2>/dev/null
+            chmod +x "$TOOL_DIR/jira"
+            rm -rf /tmp/jira.tar.gz /tmp/jira_*
+
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/yq" /usr/local/bin/yq
+            sudo install -o root -g root -m 0755 "$TOOL_DIR/jira" /usr/local/bin/jira
+          fi
+
+          echo "Tool versions:"
+          yq --version
+          jira version
+
+      - name: Setup JIRA configuration
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER: ${{ secrets.JIRA_USER }}
+        run: |
+          mkdir -p "$HOME/.config/.jira"
+          printf 'server: %s\nlogin: %s\nproject: %s\nboard: %s\ninstallation: %s\nauth_type: %s\n' \
+            "${{ env.JIRA_SERVER }}" "$JIRA_USER" "${{ env.JIRA_PROJECT }}" \
+            "${{ env.JIRA_BOARD }}" "${{ env.JIRA_INSTALLATION }}" "${{ env.JIRA_AUTH_TYPE }}" \
+            > "$HOME/.config/.jira/.config.yml"
+
+          printf 'machine %s\n  login %s\n  password %s\n' \
+            "${{ env.JIRA_SERVER }}" "$JIRA_USER" "$JIRA_API_TOKEN" \
+            > "$HOME/.netrc"
+          chmod 600 "$HOME/.netrc"
+
+          echo "JIRA configuration prepared"
+
+      - name: Reassign compliance issues
+        working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER: ${{ secrets.JIRA_USER }}
+          JIRA_SERVER: ${{ env.JIRA_SERVER }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          INPUT_RELEASE: ${{ github.event.inputs.release }}
+          INPUT_APPLICATION: ${{ github.event.inputs.application }}
+        run: |
+          CMD="./reassign-compliance-issues.sh"
+
+          if [[ "$INPUT_DRY_RUN" == "true" ]]; then
+            CMD="$CMD --dry-run"
+          fi
+
+          if [[ -n "$INPUT_RELEASE" ]]; then
+            CMD="$CMD --release $INPUT_RELEASE"
+          fi
+
+          if [[ -n "$INPUT_APPLICATION" ]]; then
+            CMD="$CMD --app $INPUT_APPLICATION"
+          fi
+
+          echo "Running: $CMD"
+          bash $CMD

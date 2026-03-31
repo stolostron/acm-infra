@@ -592,10 +592,19 @@ build_issue_description() {
     local action_items=$(build_action_items "$promotion_status" "$promoted_time" "$hermetic_status" "$ec_status" "$multiarch_status" "$push_status")
     local pipeline_links=$(build_pipeline_links "$push_pipelinerun_url" "$ec_pipelinerun_url")
 
+    # Look up squad component — take first match only to avoid multi-line breakage
+    local squad_component
+    squad_component=$(get_component_squads "$component_name" | head -n 1)
+    local squad_line=""
+    if [[ -n "$squad_component" ]]; then
+        squad_line="
+*Squad Component:* $squad_component"
+    fi
+
     local description="h2. Component Compliance Failure
 
 *Component:* \`$component_name\`
-*Application:* \`$APP_NAME\`
+*Application:* \`$APP_NAME\`$squad_line
 *Scan Time:* $scan_time
 *Image Build Time:* $promoted_time
 
@@ -686,13 +695,12 @@ All compliance checks are now passing. Auto-closing this issue.$pipeline_links"
 # ==============================================================================
 
 # Build JIRA command arguments for issue creation
-# Args: summary, desc_file, all_labels, squad_names
+# Args: summary, desc_file, all_labels
 # Sets: Global jira_cmd_args array
 build_jira_create_command() {
     local summary="$1"
     local desc_file="$2"
     local all_labels="$3"
-    local squad_names="$4"
 
     jira_cmd_args=(
         "issue" "create"
@@ -722,15 +730,13 @@ build_jira_create_command() {
         done
     fi
 
-    # Add component(s)
+    # Add component — compliance issues go to triage queue (ACM Architecture)
+    # The actual squad component is included in the issue description for reference.
+    # Use COMPLIANCE_JIRA_COMPONENT to override (default: "ACM Architecture").
     if [[ -n "$COMPONENT" ]]; then
         jira_cmd_args+=("--component" "$COMPONENT")
-    elif [[ -n "$squad_names" ]]; then
-        while IFS= read -r squad_name; do
-            if [[ -n "$squad_name" ]]; then
-                jira_cmd_args+=("--component" "$squad_name")
-            fi
-        done <<< "$squad_names"
+    else
+        jira_cmd_args+=("--component" "${COMPLIANCE_JIRA_COMPONENT:-ACM Architecture}")
     fi
 }
 
@@ -838,14 +844,12 @@ create_jira_issue() {
         all_labels="$all_labels,$compliance_specific_labels"
     fi
 
-    local squad_names=$(get_component_squads "$component_name")
-
     # Prepare description file
     local desc_file=$(mktemp)
     echo "$description" > "$desc_file"
 
     # Build JIRA command
-    build_jira_create_command "$summary" "$desc_file" "$all_labels" "$squad_names"
+    build_jira_create_command "$summary" "$desc_file" "$all_labels"
 
     # Handle dry-run mode
     if [[ "$DRY_RUN" == true ]]; then
