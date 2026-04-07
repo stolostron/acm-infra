@@ -440,11 +440,7 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
     workspace_dir="{{workspace}}"
     if [ "$workspace_dir" = "." ]; then
         # Clone release management repo and create branch
-        app_lower=$(echo "{{app}}" | tr '[:upper:]' '[:lower:]')
-        branch_name="${app_lower}-${major}${minor}-z${patch}"
-        if [ "{{type}}" = "stage" ]; then
-            branch_name="${branch_name}-rc{{rc}}"
-        fi
+        branch_name="{{type}}-release-rc{{rc}}"
 
         just clone-release-mgmt "$branch_name" "{{cert_file}}"
         workspace_dir="acm-release-management"
