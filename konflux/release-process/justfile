@@ -31,6 +31,15 @@ query-bugs app version bundle="false":
         fi
     }
 
+    # Debug: Show bug list with clickable links
+    if [[ "{{debug}}" == "true" ]]; then
+        echo "[query-bugs] Bugs found:" >&2
+        echo "$jira_output" | jq -r '.[] |
+            "\u001b]8;;https://redhat.atlassian.net/browse/\(.key)\u001b\\\(.key)\u001b]8;;\u001b\\: \(.fields.summary)"
+        ' | sort >&2 || true
+        echo "" >&2
+    fi
+
     # Extract and format bug keys
     echo "$jira_output" | jq -r 'map({id: .key, source: "issues.redhat.com"}) | sort_by(.id)' | yq -p=json
 
