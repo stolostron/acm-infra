@@ -31,6 +31,15 @@ query-bugs app version bundle="false":
         fi
     }
 
+    # Debug: Show bug list with clickable links
+    if [[ "{{debug}}" == "true" ]]; then
+        echo "[query-bugs] Bugs found:" >&2
+        echo "$jira_output" | jq -r '.[] |
+            "\u001b]8;;https://redhat.atlassian.net/browse/\(.key)\u001b\\\(.key)\u001b]8;;\u001b\\: \(.fields.summary)"
+        ' | sort >&2 || true
+        echo "" >&2
+    fi
+
     # Extract and format bug keys
     echo "$jira_output" | jq -r 'map({id: .key, source: "issues.redhat.com"}) | sort_by(.id)' | yq -p=json
 
@@ -79,7 +88,15 @@ query-cves app version:
     output=$(echo "$jira_output" | jq -s --argjson registry "$registry" --arg suffix "$suffix" '
         .[0] as $jira |
         ($registry.components | map(select(.prodseccomponent != null)) | map({(.prodseccomponent): .konflux_component}) | add) as $lookup |
-        $jira | map({
+        $jira |
+        # Filter to only CVEs with pscomponent labels matching rhacm2* or multicluster-engine*
+        map(select(
+            .fields.labels | any(
+                startswith("pscomponent:rhacm2") or
+                startswith("pscomponent:multicluster-engine")
+            )
+        )) |
+        map({
             key: (.fields.labels[] | select(test("^CVE-[0-9]+-[0-9]+$"))),
             prodseccomponent: (.fields.labels[] | select(startswith("pscomponent:")))
         }) |
@@ -377,8 +394,50 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     # Apply using helper
     just _apply "$bundle" {{skip_confirm}} {{dry_run}}
 
+# Remove cloned release management repo
+cleanup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    repo_dir="acm-release-management"
+
+    if [ -d "$repo_dir" ]; then
+        rm -rf "$repo_dir"
+        echo "✅ Removed $repo_dir"
+    else
+        echo "ℹ️  $repo_dir does not exist"
+    fi
+
+# Clone release management repo and create a branch
+clone-release-mgmt branch_name cert_file="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    repo_dir="acm-release-management"
+    upstream="acm/acm-release-management"
+    gitlab_host="gitlab.cee.redhat.com"
+
+    # Set SSL cert file if provided
+    if [ -n "{{cert_file}}" ]; then
+        export SSL_CERT_FILE="{{cert_file}}"
+    fi
+
+    # Clone if not exists
+    if [ ! -d "$repo_dir" ]; then
+        git clone git@$gitlab_host:$upstream.git
+    fi
+
+    cd "$repo_dir"
+
+    # Fetch latest and create branch from main
+    git fetch origin
+    git checkout -b {{branch_name}} origin/main
+
+    echo "✅ Branch {{branch_name}} created from origin/main"
+
 # Release: generate YAML, save to disk, and apply to cluster
-release target type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc)
+[arg("dry_run", long="dry_run")]
+release target type app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="": (_validate type app rc)
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -394,9 +453,19 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
     patch=$(echo "{{version}}" | cut -d. -f3)
     short_version="${major}${minor}"
 
+    # If workspace is default, clone the release management repo
+    workspace_dir="{{workspace}}"
+    if [ "$workspace_dir" = "." ]; then
+        # Clone release management repo and create branch
+        branch_name="{{type}}-release-rc{{rc}}"
+
+        just clone-release-mgmt "$branch_name" "{{cert_file}}"
+        workspace_dir="acm-release-management"
+    fi
+
     # Build directory path
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
-    release_dir="{{workspace}}/${app_upper}/${app_upper}-{{version}}"
+    release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
 
     if [ "{{type}}" = "stage" ]; then
         release_dir="${release_dir}/rc{{rc}}"
