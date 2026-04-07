@@ -795,6 +795,10 @@ jobs:
 
           if [[ -f "$RELEASE_CSV" ]]; then
             source ./create-compliance-jira-issues.sh
+            # Override AUTO_CLOSE since sourcing the script resets it to false.
+            # The main() path uses --auto-close flag, but direct function calls
+            # need the variable set explicitly.
+            AUTO_CLOSE=true
             create_release_jira_issues "$RELEASE_CSV" 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-release-jira.log"
           else
             echo "No release status CSV found, skipping"
