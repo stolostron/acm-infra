@@ -79,7 +79,15 @@ query-cves app version:
     output=$(echo "$jira_output" | jq -s --argjson registry "$registry" --arg suffix "$suffix" '
         .[0] as $jira |
         ($registry.components | map(select(.prodseccomponent != null)) | map({(.prodseccomponent): .konflux_component}) | add) as $lookup |
-        $jira | map({
+        $jira |
+        # Filter to only CVEs with pscomponent labels matching rhacm2* or multicluster-engine*
+        map(select(
+            .fields.labels | any(
+                startswith("pscomponent:rhacm2") or
+                startswith("pscomponent:multicluster-engine")
+            )
+        )) |
+        map({
             key: (.fields.labels[] | select(test("^CVE-[0-9]+-[0-9]+$"))),
             prodseccomponent: (.fields.labels[] | select(startswith("pscomponent:")))
         }) |
