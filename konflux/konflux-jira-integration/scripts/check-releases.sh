@@ -42,17 +42,17 @@ check_releases() {
         local release_status="Unknown"
         local released_condition
         released_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Released") | .status' 2>/dev/null || echo "")
+        local released_reason
+        released_reason=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Released") | .reason' 2>/dev/null || echo "")
 
         if [[ "$released_condition" == "True" ]]; then
             release_status="Succeeded"
-        elif [[ "$released_condition" == "False" ]]; then
-            release_status="Failed"
         else
-            # Check if still in progress
-            local processing_condition
-            processing_condition=$(echo "$release" | jq -r '.status.conditions[] | select(.type == "Processing") | .status' 2>/dev/null || echo "")
-            if [[ "$processing_condition" == "True" ]]; then
+            # Check if the reason is "Progressing" before marking as Failed
+            if [[ "$released_reason" == "Progressing" ]]; then
                 release_status="InProgress"
+            else
+                release_status="Failed"
             fi
         fi
 
