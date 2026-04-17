@@ -4,6 +4,9 @@ debug := "false"
 # Workspace directory for saving release files (can be overridden)
 workspace := "."
 
+# Directory where this justfile is located
+justfile_dir := justfile_directory()
+
 # Query bugs from Jira for a specific application and version
 # bundle: "true" (bundle-bugs only), "false" (exclude bundle-bugs, default)
 query-bugs app version bundle="false":
@@ -393,6 +396,117 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
 
     # Apply using helper
     just _apply "$bundle" {{skip_confirm}} {{dry_run}}
+
+# Setup catalog release structure: create directories, split snapshot, and generate Release YAMLs
+setup-catalogs app version snapshot rc:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Validate app
+    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
+        echo "Error: app must be 'acm' or 'mce'" >&2
+        exit 1
+    fi
+
+    # Parse version
+    major=$(echo "{{version}}" | cut -d. -f1)
+    minor=$(echo "{{version}}" | cut -d. -f2)
+    patch=$(echo "{{version}}" | cut -d. -f3)
+    short_version="${major}${minor}"
+
+    # Build directory path
+    base_dir="/home/gparvin/ACM/install/acm-release-management"
+    app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
+    release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
+    snapshots_dir="${release_dir}/snapshots"
+    releases_dir="${release_dir}/releases"
+
+    echo "📁 Setting up catalog directories..."
+    echo "   Base: ${release_dir}"
+
+    # Create directories
+    mkdir -p "$snapshots_dir"
+    mkdir -p "$releases_dir"
+    echo "   ✓ Created: snapshots/"
+    echo "   ✓ Created: releases/"
+    echo ""
+
+    # Fetch snapshot from cluster
+    echo "📥 Fetching snapshot from cluster..."
+    snapshot_file="${release_dir}/snapshot-{{snapshot}}.yaml"
+    oc get snapshot {{snapshot}} -n crt-redhat-acm-tenant -o yaml > "$snapshot_file" || {
+        echo "❌ Failed to fetch snapshot {{snapshot}} from cluster" >&2
+        exit 1
+    }
+    echo "   ✓ Saved: $(basename "$snapshot_file")"
+    echo ""
+
+    # Split the snapshot using split_snapshot.py
+    echo "🔨 Splitting snapshot into individual components..."
+    split_script="{{justfile_dir}}/lib/split_snapshot.py"
+
+    if [ ! -f "$split_script" ]; then
+        echo "❌ Error: split_snapshot.py not found at $split_script" >&2
+        exit 1
+    fi
+
+    python3 "$split_script" "$snapshot_file" "$snapshots_dir"
+    echo ""
+
+    # Generate Release YAML files for each snapshot
+    echo "📝 Generating Release YAML files..."
+    namespace="crt-redhat-acm-tenant"
+    release_plan="{{app}}-release-plan-stage"
+    author=$(git config user.email 2>/dev/null | cut -d'@' -f1)
+
+    if [ -z "$author" ]; then
+        echo "❌ Failed to get git user.email. Please configure git:" >&2
+        echo "   git config user.name \"Your Name\"" >&2
+        echo "   git config user.email \"your.email@example.com\"" >&2
+        exit 1
+    fi
+
+    # Build version suffix
+    version_suffix="${short_version}-z${patch}-rc{{rc}}"
+
+    count=0
+    for snapshot_file in "$snapshots_dir"/snapshot-*.yaml; do
+        [ -f "$snapshot_file" ] || continue
+
+        # Extract component name from snapshot filename
+        component_name=$(basename "$snapshot_file" .yaml | sed 's/^snapshot-//')
+
+        # Add version suffix to create unique names
+        snapshot_name="${component_name}-${version_suffix}"
+        release_name="${component_name}-${version_suffix}"
+
+        # Update the snapshot name in the snapshot file
+        yq eval -i ".metadata.name = \"${snapshot_name}\"" "$snapshot_file"
+
+        # Rename snapshot file to include version
+        versioned_snapshot_file="${snapshots_dir}/snapshot-${snapshot_name}.yaml"
+        mv "$snapshot_file" "$versioned_snapshot_file"
+
+        # Generate release YAML using yq to avoid heredoc issues
+        release_file="${releases_dir}/${release_name}.yaml"
+
+        yq eval ".metadata.name = \"${release_name}\" |
+            .metadata.namespace = \"${namespace}\" |
+            .metadata.labels[\"release.appstudio.openshift.io/author\"] = \"${author}\" |
+            .spec.snapshot = \"${snapshot_name}\" |
+            .spec.releasePlan = \"${release_plan}\" |
+            .spec.data.releaseNotes.type = \"RHEA\"" \
+            "{{justfile_dir}}/templates/release.yaml" > "$release_file"
+
+        echo "   ✓ Created: $(basename "$release_file")"
+        count=$((count + 1))
+    done
+
+    echo ""
+    echo "✅ Catalog setup complete!"
+    echo "   Directory: ${release_dir}"
+    echo "   Snapshots: ${count} files in snapshots/"
+    echo "   Releases: ${count} files in releases/"
 
 # Remove cloned release management repo
 cleanup:
