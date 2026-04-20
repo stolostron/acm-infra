@@ -394,6 +394,64 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     # Apply using helper
     just _apply "$bundle" {{skip_confirm}} {{dry_run}}
 
+# Retrieve FBC catalog images from releases
+retrieve-fbc-catalog-images app version rc ocp_versions:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Validate app
+    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
+        echo "Error: app must be 'acm' or 'mce'" >&2
+        exit 1
+    fi
+
+    # Parse version
+    major=$(echo "{{version}}" | cut -d. -f1)
+    minor=$(echo "{{version}}" | cut -d. -f2)
+    patch=$(echo "{{version}}" | cut -d. -f3)
+    short_version="${major}${minor}"
+
+    # Parse OCP versions (e.g., "4.12,4.14-4.17" -> [4.12, 4.14, 4.15, 4.16, 4.17])
+    versions=()
+    IFS=',' read -ra items <<< "{{ocp_versions}}"
+    for item in "${items[@]}"; do
+        if [[ "$item" =~ ^([0-9]+)\.([0-9]+)-([0-9]+)\.([0-9]+)$ ]]; then
+            # Range format: 4.14-4.17
+            start_major="${BASH_REMATCH[1]}"
+            start_minor="${BASH_REMATCH[2]}"
+            end_major="${BASH_REMATCH[3]}"
+            end_minor="${BASH_REMATCH[4]}"
+
+            if [[ "$start_major" != "$end_major" ]]; then
+                echo "Error: range must have same major version: $item" >&2
+                exit 1
+            fi
+
+            for ((i=start_minor; i<=end_minor; i++)); do
+                versions+=("${start_major}.${i}")
+            done
+        elif [[ "$item" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            # Single version: 4.12
+            versions+=("$item")
+        else
+            echo "Error: invalid OCP version format: $item" >&2
+            exit 1
+        fi
+    done
+
+    # Retrieve index images for each version
+    for ocp_ver in "${versions[@]}"; do
+        # Convert version format: 4.12 -> 4-12
+        ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
+
+        release_name="{{app}}-fbc-ocm-${ocp_file_ver}-stage-${short_version}-z${patch}-rc{{rc}}"
+
+        [[ "{{debug}}" == "true" ]] && echo "📦 OCP $ocp_ver (${release_name})" >&2
+        oc get release "$release_name" -n crt-redhat-acm-tenant -o yaml 2>/dev/null | \
+            yq '.status.artifacts.components[] | .ocp_version + ": " + .index_image' || \
+            { [[ "{{debug}}" == "true" ]] && echo "❌ Release not found or not ready: ${release_name}" >&2; }
+    done
+
 # Apply a list of catalog snapshots and releases
 apply-catalogs app version rc ocp_versions:
     #!/usr/bin/env bash
