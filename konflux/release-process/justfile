@@ -4,9 +4,6 @@ debug := "false"
 # Workspace directory for saving release files (can be overridden)
 workspace := "."
 
-# Directory where this justfile is located
-justfile_dir := justfile_directory()
-
 # Query bugs from Jira for a specific application and version
 # bundle: "true" (bundle-bugs only), "false" (exclude bundle-bugs, default)
 query-bugs app version bundle="false":
@@ -415,7 +412,7 @@ setup-catalogs app version snapshot rc:
     short_version="${major}${minor}"
 
     # Build directory path
-    base_dir="/home/gparvin/ACM/install/acm-release-management"
+    base_dir="{{justfile_directory()}}"
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
     release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
     snapshots_dir="${release_dir}/snapshots"
@@ -443,7 +440,7 @@ setup-catalogs app version snapshot rc:
 
     # Split the snapshot using split_snapshot.py
     echo "🔨 Splitting snapshot into individual components..."
-    split_script="{{justfile_dir}}/lib/split_snapshot.py"
+    split_script="{{justfile_directory()}}/lib/split_snapshot.py"
 
     if [ ! -f "$split_script" ]; then
         echo "❌ Error: split_snapshot.py not found at $split_script" >&2
@@ -496,7 +493,7 @@ setup-catalogs app version snapshot rc:
             .spec.snapshot = \"${snapshot_name}\" |
             .spec.releasePlan = \"${release_plan}\" |
             .spec.data.releaseNotes.type = \"RHEA\"" \
-            "{{justfile_dir}}/templates/release.yaml" > "$release_file"
+            "{{justfile_directory()}}/templates/release.yaml" > "$release_file"
 
         echo "   ✓ Created: $(basename "$release_file")"
         count=$((count + 1))
@@ -543,13 +540,22 @@ clone-release-mgmt branch_name cert_file="":
 
     cd "$repo_dir"
 
-    # Fetch latest and create branch from main
+    # Fetch latest
     git fetch origin
-    git checkout -b {{branch_name}} origin/main
 
-    echo "✅ Branch {{branch_name}} created from origin/main"
+    # Create branch from main if it doesn't exist, otherwise switch to it
+    if git show-ref --verify --quiet refs/heads/{{branch_name}}; then
+        git checkout {{branch_name}}
+        echo "✅ Switched to existing branch {{branch_name}}"
+    else
+        git checkout -b {{branch_name}} origin/main
+        echo "✅ Branch {{branch_name}} created from origin/main"
+    fi
 
 # Release: generate YAML, save to disk, and apply to cluster
+[arg("skip_confirm", long="false")]
+[arg("cert_file", long="cert_file")]
+[arg("rc", long="rc")]
 [arg("dry_run", long="dry_run")]
 release target type app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="": (_validate type app rc)
     #!/usr/bin/env bash
