@@ -205,6 +205,36 @@ _check_oc_cluster:
 
     echo "✅ OpenShift cluster access verified (project: $expected_project)" >&2
 
+# Private: setup Python venv and ensure PyYAML is installed
+_setup_python_venv:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    venv_dir="{{justfile_directory()}}/.venv"
+    python_bin="$venv_dir/bin/python"
+    pip_bin="$venv_dir/bin/pip"
+
+    # Check if python3 is available
+    if ! command -v python3 &>/dev/null; then
+        echo "❌ python3 command not found" >&2
+        echo "   Please install Python 3" >&2
+        exit 1
+    fi
+
+    # Create venv if it doesn't exist
+    if [ ! -d "$venv_dir" ]; then
+        echo "🐍 Creating Python virtual environment..." >&2
+        python3 -m venv "$venv_dir"
+    fi
+
+    # Check/install PyYAML
+    if ! "$python_bin" -c "import yaml" 2>/dev/null; then
+        echo "📦 Installing PyYAML..." >&2
+        "$pip_bin" install pyyaml
+    fi
+
+    echo "✅ Python venv ready (PyYAML installed)" >&2
+
 # Private: check GitLab access
 _check_gitlab_access:
     #!/usr/bin/env bash
