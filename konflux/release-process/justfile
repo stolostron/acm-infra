@@ -164,11 +164,21 @@ _get_author:
     author=$(git config user.email 2>/dev/null | cut -d'@' -f1)
     if [ -z "$author" ]; then
         echo "❌ Failed to get git user.email. Please configure git:" >&2
-        echo "   git config user.name \"Your Name\"" >&2
         echo "   git config user.email \"your.email@example.com\"" >&2
         exit 1
     fi
     echo "$author"
+
+# Private: build catalog directory paths (returns: release_dir snapshots_dir releases_dir)
+_catalog_dirs app version rc:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base_dir="{{justfile_directory()}}/acm-release-management"
+    app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
+    release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
+    snapshots_dir="${release_dir}/snapshots"
+    releases_dir="${release_dir}/releases"
+    echo "$release_dir $snapshots_dir $releases_dir"
 
 # Private: parse OCP versions string into space-separated list
 _parse_ocp_versions ocp_versions:
@@ -471,19 +481,15 @@ retrieve-fbc-catalog-images app version rc ocp_versions: (_validate_app app)
     done
 
 # Apply a list of catalog snapshots and releases
-apply-catalogs app version rc ocp_versions: (_validate_app app)
+apply-stage-catalogs app version rc ocp_versions: (_validate_app app)
     #!/usr/bin/env bash
     set -euo pipefail
 
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build directory path
-    base_dir="{{justfile_directory()}}/acm-release-management"
-    app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
-    release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
-    snapshots_dir="${release_dir}/snapshots"
-    releases_dir="${release_dir}/releases"
+    # Build directory paths
+    read -r release_dir snapshots_dir releases_dir <<< $(just _catalog_dirs {{app}} {{version}} {{rc}})
 
     # Parse OCP versions
     versions=($(just _parse_ocp_versions {{ocp_versions}}))
@@ -520,19 +526,15 @@ apply-catalogs app version rc ocp_versions: (_validate_app app)
     
 
 # Setup catalog release structure: create directories, split snapshot, and generate Release YAMLs
-setup-catalogs app version snapshot rc: (_validate_app app)
+setup-stage-catalogs app version snapshot rc: (_validate_app app)
     #!/usr/bin/env bash
     set -euo pipefail
 
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build directory path
-    base_dir="{{justfile_directory()}}/acm-release-management"
-    app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
-    release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
-    snapshots_dir="${release_dir}/snapshots"
-    releases_dir="${release_dir}/releases"
+    # Build directory paths
+    read -r release_dir snapshots_dir releases_dir <<< $(just _catalog_dirs {{app}} {{version}} {{rc}})
 
     echo "📁 Setting up catalog directories..."
     echo "   Base: ${release_dir}"
