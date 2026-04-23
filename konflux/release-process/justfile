@@ -121,6 +121,15 @@ query-cves app version:
         exit 1
     fi
 
+# Private: validate app parameter
+_validate_app app:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
+        echo "Error: app must be 'acm' or 'mce'" >&2
+        exit 1
+    fi
+
 # Private: validate common inputs
 _validate type app rc:
     #!/usr/bin/env bash
@@ -137,6 +146,64 @@ _validate type app rc:
         echo "Error: rc parameter is required for stage releases" >&2
         exit 1
     fi
+
+# Private: parse version into major.minor.patch.short_version (space-separated)
+_parse_version version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    major=$(echo "{{version}}" | cut -d. -f1)
+    minor=$(echo "{{version}}" | cut -d. -f2)
+    patch=$(echo "{{version}}" | cut -d. -f3)
+    short_version="${major}${minor}"
+    echo "$major $minor $patch $short_version"
+
+# Private: get git author from email
+_get_author:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    author=$(git config user.email 2>/dev/null | cut -d'@' -f1)
+    if [ -z "$author" ]; then
+        echo "❌ Failed to get git user.email. Please configure git:" >&2
+        echo "   git config user.name \"Your Name\"" >&2
+        echo "   git config user.email \"your.email@example.com\"" >&2
+        exit 1
+    fi
+    echo "$author"
+
+# Private: parse OCP versions string into space-separated list
+_parse_ocp_versions ocp_versions:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    versions=()
+    IFS=',' read -ra items <<< "{{ocp_versions}}"
+    for item in "${items[@]}"; do
+        if [[ "$item" =~ ^([0-9]+)\.([0-9]+)-([0-9]+)\.([0-9]+)$ ]]; then
+            # Range format: 4.14-4.17
+            start_major="${BASH_REMATCH[1]}"
+            start_minor="${BASH_REMATCH[2]}"
+            end_major="${BASH_REMATCH[3]}"
+            end_minor="${BASH_REMATCH[4]}"
+
+            if [[ "$start_major" != "$end_major" ]]; then
+                echo "Error: range must have same major version: $item" >&2
+                exit 1
+            fi
+
+            for ((i=start_minor; i<=end_minor; i++)); do
+                versions+=("${start_major}.${i}")
+            done
+        elif [[ "$item" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            # Single version: 4.12
+            versions+=("$item")
+        else
+            echo "Error: invalid OCP version format: $item" >&2
+            exit 1
+        fi
+    done
+
+    # Output versions space-separated
+    echo "${versions[@]}"
 
 # Private: show YAML and confirm
 _show_and_confirm yaml skip_confirm="false" dry_run="true":
@@ -186,13 +253,7 @@ _build_base app snapshot release_name release_plan release_type:
     namespace="crt-redhat-acm-tenant"
     [[ "{{debug}}" == "true" ]] && echo "[_build_base] namespace=$namespace" >&2 || true
 
-    author=$(git config user.email 2>/dev/null | cut -d'@' -f1)
-    if [ -z "$author" ]; then
-        echo "❌ Failed to get git user.email. Please configure git:" >&2
-        echo "   git config user.name \"Your Name\"" >&2
-        echo "   git config user.email \"your.email@example.com\"" >&2
-        exit 1
-    fi
+    author=$(just _get_author)
     [[ "{{debug}}" == "true" ]] && echo "[_build_base] author=$author" >&2 || true
 
     [[ "{{debug}}" == "true" ]] && echo "[_build_base] Running yq eval..." >&2 || true
@@ -216,10 +277,7 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
     set -euo pipefail
 
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # Build metadata
     if [ "{{type}}" = "stage" ]; then
@@ -304,10 +362,7 @@ generate-catalog type app version snapshot rc="": (_validate type app rc)
     set -euo pipefail
 
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # Build metadata
     if [ "{{type}}" = "stage" ]; then
@@ -347,10 +402,7 @@ generate-bundle type app version snapshot rc="": (_validate type app rc)
     set -euo pipefail
 
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # Build metadata
     if [ "{{type}}" = "stage" ]; then
@@ -395,49 +447,15 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     just _apply "$bundle" {{skip_confirm}} {{dry_run}}
 
 # Retrieve FBC catalog images from releases
-retrieve-fbc-catalog-images app version rc ocp_versions:
+retrieve-fbc-catalog-images app version rc ocp_versions: (_validate_app app)
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Validate app
-    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
-        echo "Error: app must be 'acm' or 'mce'" >&2
-        exit 1
-    fi
-
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Parse OCP versions (e.g., "4.12,4.14-4.17" -> [4.12, 4.14, 4.15, 4.16, 4.17])
-    versions=()
-    IFS=',' read -ra items <<< "{{ocp_versions}}"
-    for item in "${items[@]}"; do
-        if [[ "$item" =~ ^([0-9]+)\.([0-9]+)-([0-9]+)\.([0-9]+)$ ]]; then
-            # Range format: 4.14-4.17
-            start_major="${BASH_REMATCH[1]}"
-            start_minor="${BASH_REMATCH[2]}"
-            end_major="${BASH_REMATCH[3]}"
-            end_minor="${BASH_REMATCH[4]}"
-
-            if [[ "$start_major" != "$end_major" ]]; then
-                echo "Error: range must have same major version: $item" >&2
-                exit 1
-            fi
-
-            for ((i=start_minor; i<=end_minor; i++)); do
-                versions+=("${start_major}.${i}")
-            done
-        elif [[ "$item" =~ ^[0-9]+\.[0-9]+$ ]]; then
-            # Single version: 4.12
-            versions+=("$item")
-        else
-            echo "Error: invalid OCP version format: $item" >&2
-            exit 1
-        fi
-    done
+    # Parse OCP versions
+    versions=($(just _parse_ocp_versions {{ocp_versions}}))
 
     # Retrieve index images for each version
     for ocp_ver in "${versions[@]}"; do
@@ -453,21 +471,12 @@ retrieve-fbc-catalog-images app version rc ocp_versions:
     done
 
 # Apply a list of catalog snapshots and releases
-apply-catalogs app version rc ocp_versions:
+apply-catalogs app version rc ocp_versions: (_validate_app app)
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Validate app
-    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
-        echo "Error: app must be 'acm' or 'mce'" >&2
-        exit 1
-    fi
-
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # Build directory path
     base_dir="{{justfile_directory()}}/acm-release-management"
@@ -476,33 +485,8 @@ apply-catalogs app version rc ocp_versions:
     snapshots_dir="${release_dir}/snapshots"
     releases_dir="${release_dir}/releases"
 
-    # Parse OCP versions (e.g., "4.12,4.14-4.17" -> [4.12, 4.14, 4.15, 4.16, 4.17])
-    versions=()
-    IFS=',' read -ra items <<< "{{ocp_versions}}"
-    for item in "${items[@]}"; do
-        if [[ "$item" =~ ^([0-9]+)\.([0-9]+)-([0-9]+)\.([0-9]+)$ ]]; then
-            # Range format: 4.14-4.17
-            start_major="${BASH_REMATCH[1]}"
-            start_minor="${BASH_REMATCH[2]}"
-            end_major="${BASH_REMATCH[3]}"
-            end_minor="${BASH_REMATCH[4]}"
-
-            if [[ "$start_major" != "$end_major" ]]; then
-                echo "Error: range must have same major version: $item" >&2
-                exit 1
-            fi
-
-            for ((i=start_minor; i<=end_minor; i++)); do
-                versions+=("${start_major}.${i}")
-            done
-        elif [[ "$item" =~ ^[0-9]+\.[0-9]+$ ]]; then
-            # Single version: 4.12
-            versions+=("$item")
-        else
-            echo "Error: invalid OCP version format: $item" >&2
-            exit 1
-        fi
-    done
+    # Parse OCP versions
+    versions=($(just _parse_ocp_versions {{ocp_versions}}))
 
     # Apply snapshots and releases for each version
     for ocp_ver in "${versions[@]}"; do
@@ -536,21 +520,12 @@ apply-catalogs app version rc ocp_versions:
     
 
 # Setup catalog release structure: create directories, split snapshot, and generate Release YAMLs
-setup-catalogs app version snapshot rc:
+setup-catalogs app version snapshot rc: (_validate_app app)
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Validate app
-    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
-        echo "Error: app must be 'acm' or 'mce'" >&2
-        exit 1
-    fi
-
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # Build directory path
     base_dir="{{justfile_directory()}}/acm-release-management"
@@ -595,14 +570,7 @@ setup-catalogs app version snapshot rc:
     echo "📝 Generating Release YAML files..."
     namespace="crt-redhat-acm-tenant"
     release_plan="{{app}}-release-plan-stage"
-    author=$(git config user.email 2>/dev/null | cut -d'@' -f1)
-
-    if [ -z "$author" ]; then
-        echo "❌ Failed to get git user.email. Please configure git:" >&2
-        echo "   git config user.name \"Your Name\"" >&2
-        echo "   git config user.email \"your.email@example.com\"" >&2
-        exit 1
-    fi
+    author=$(just _get_author)
 
     # Build version suffix
     version_suffix="${short_version}-z${patch}-rc{{rc}}"
@@ -709,10 +677,7 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
     fi
 
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # If workspace is default, clone the release management repo
     workspace_dir="{{workspace}}"
