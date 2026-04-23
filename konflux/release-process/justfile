@@ -1,3 +1,5 @@
+import 'utils.just'
+
 # Debug flag (set to "true" to enable debug output)
 debug := "false"
 
@@ -121,105 +123,13 @@ query-cves app version:
         exit 1
     fi
 
-# Private: validate common inputs
-_validate type app rc:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "{{type}}" != "stage" && "{{type}}" != "prod" ]]; then
-        echo "Error: type must be 'stage' or 'prod'" >&2
-        exit 1
-    fi
-    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
-        echo "Error: app must be 'acm' or 'mce'" >&2
-        exit 1
-    fi
-    if [[ "{{type}}" == "stage" && -z "{{rc}}" ]]; then
-        echo "Error: rc parameter is required for stage releases" >&2
-        exit 1
-    fi
-
-# Private: show YAML and confirm
-_show_and_confirm yaml skip_confirm="false" dry_run="true":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    # Show the YAML to the user
-    echo "{{yaml}}"
-
-    # Confirm unless skip_confirm is true
-    if [ "{{skip_confirm}}" != "true" ]; then
-        echo "" >&2
-        if [ "{{dry_run}}" = "true" ]; then
-            echo "Press Enter to continue (DRY-RUN), or Ctrl+C to cancel..." >&2
-        else
-            echo "Press Enter to continue (LIVE), or Ctrl+C to cancel..." >&2
-        fi
-        read -r
-    fi
-
-# Private: apply YAML to cluster with confirmation
-_apply yaml skip_confirm="false" dry_run="true":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    # Show and confirm
-    just _show_and_confirm "{{yaml}}" {{skip_confirm}} {{dry_run}}
-
-    # Apply to cluster
-    if [ "{{dry_run}}" = "true" ]; then
-        echo "{{yaml}}" | oc apply --dry-run=server -f -
-    else
-        echo "{{yaml}}" | oc apply -f -
-    fi
-
-# Private: build base release YAML from template
-_build_base app snapshot release_name release_plan release_type:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    if [[ "{{debug}}" == "true" ]]; then
-        echo "[_build_base] Starting..." >&2
-        echo "[_build_base] app={{app}}, snapshot={{snapshot}}" >&2
-        echo "[_build_base] release_name={{release_name}}, release_plan={{release_plan}}, release_type={{release_type}}" >&2
-    fi
-
-    namespace="crt-redhat-acm-tenant"
-    [[ "{{debug}}" == "true" ]] && echo "[_build_base] namespace=$namespace" >&2 || true
-
-    author=$(git config user.email 2>/dev/null | cut -d'@' -f1)
-    if [ -z "$author" ]; then
-        echo "❌ Failed to get git user.email. Please configure git:" >&2
-        echo "   git config user.name \"Your Name\"" >&2
-        echo "   git config user.email \"your.email@example.com\"" >&2
-        exit 1
-    fi
-    [[ "{{debug}}" == "true" ]] && echo "[_build_base] author=$author" >&2 || true
-
-    [[ "{{debug}}" == "true" ]] && echo "[_build_base] Running yq eval..." >&2 || true
-
-    yq eval ".metadata.name = \"{{release_name}}\" |
-        .metadata.namespace = \"$namespace\" |
-        .metadata.labels[\"release.appstudio.openshift.io/author\"] = \"$author\" |
-        .spec.snapshot = \"{{snapshot}}\" |
-        .spec.releasePlan = \"{{release_plan}}\" |
-        .spec.data.releaseNotes.type = \"{{release_type}}\"" \
-        templates/release.yaml || {
-        echo "[_build_base] yq eval failed!" >&2
-        exit 1
-    }
-
-    [[ "{{debug}}" == "true" ]] && echo "[_build_base] Complete" >&2 || true
-
 # Generate a payload YAML (outputs to stdout)
 generate-payload type app version snapshot rc="": (_validate type app rc)
     #!/usr/bin/env bash
     set -euo pipefail
 
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # Build metadata
     if [ "{{type}}" = "stage" ]; then
@@ -288,7 +198,7 @@ generate-payload type app version snapshot rc="": (_validate type app rc)
     echo "$output"
 
 # Apply a payload release to the cluster
-apply-payload type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc)
+apply-payload type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -298,59 +208,13 @@ apply-payload type app version snapshot rc="" skip_confirm="false" dry_run="true
     # Apply using helper
     just _apply "$payload" {{skip_confirm}} {{dry_run}}
 
-# Generate a catalog YAML (outputs to stdout)
-generate-catalog type app version snapshot rc="": (_validate type app rc)
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
-
-    # Build metadata
-    if [ "{{type}}" = "stage" ]; then
-        release_name="stage-publish-catalog-{{app}}-${short_version}-z${patch}-rc{{rc}}"
-        release_plan="{{app}}-release-plan-stage"
-    else
-        release_name="prod-publish-catalog-{{app}}-${short_version}-z${patch}"
-        release_plan="{{app}}-release-plan-prod"
-    fi
-
-    [[ "{{debug}}" == "true" ]] && echo "[generate-catalog] Generating catalog YAML..." >&2
-
-    # Build base YAML (catalog is always RHEA)
-    output=$(just debug={{debug}} _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHEA")
-
-    # Add references for ACM
-    if [[ "{{app}}" == "acm" ]]; then
-        output=$(echo "$output" | yq eval '.spec.data.releaseNotes.references = ["https://access.redhat.com/security/updates/classification/#important"]')
-    fi
-
-    echo "$output"
-
-# Apply a catalog release to the cluster
-apply-catalog type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc)
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    # Generate the catalog
-    catalog=$(just debug={{debug}} generate-catalog {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
-
-    # Apply using helper
-    just _apply "$catalog" {{skip_confirm}} {{dry_run}}
-
 # Generate a bundle YAML (outputs to stdout)
 generate-bundle type app version snapshot rc="": (_validate type app rc)
     #!/usr/bin/env bash
     set -euo pipefail
 
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # Build metadata
     if [ "{{type}}" = "stage" ]; then
@@ -384,7 +248,7 @@ generate-bundle type app version snapshot rc="": (_validate type app rc)
     echo "$output"
 
 # Apply a bundle release to the cluster
-apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc)
+apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true": (_validate type app rc) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -395,49 +259,15 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     just _apply "$bundle" {{skip_confirm}} {{dry_run}}
 
 # Retrieve FBC catalog images from releases
-retrieve-fbc-catalog-images app version rc ocp_versions:
+retrieve-fbc-catalog-images app version rc ocp_versions: (_validate_app app) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Validate app
-    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
-        echo "Error: app must be 'acm' or 'mce'" >&2
-        exit 1
-    fi
-
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Parse OCP versions (e.g., "4.12,4.14-4.17" -> [4.12, 4.14, 4.15, 4.16, 4.17])
-    versions=()
-    IFS=',' read -ra items <<< "{{ocp_versions}}"
-    for item in "${items[@]}"; do
-        if [[ "$item" =~ ^([0-9]+)\.([0-9]+)-([0-9]+)\.([0-9]+)$ ]]; then
-            # Range format: 4.14-4.17
-            start_major="${BASH_REMATCH[1]}"
-            start_minor="${BASH_REMATCH[2]}"
-            end_major="${BASH_REMATCH[3]}"
-            end_minor="${BASH_REMATCH[4]}"
-
-            if [[ "$start_major" != "$end_major" ]]; then
-                echo "Error: range must have same major version: $item" >&2
-                exit 1
-            fi
-
-            for ((i=start_minor; i<=end_minor; i++)); do
-                versions+=("${start_major}.${i}")
-            done
-        elif [[ "$item" =~ ^[0-9]+\.[0-9]+$ ]]; then
-            # Single version: 4.12
-            versions+=("$item")
-        else
-            echo "Error: invalid OCP version format: $item" >&2
-            exit 1
-        fi
-    done
+    # Parse OCP versions
+    versions=($(just _parse_ocp_versions {{ocp_versions}}))
 
     # Retrieve index images for each version
     for ocp_ver in "${versions[@]}"; do
@@ -453,64 +283,31 @@ retrieve-fbc-catalog-images app version rc ocp_versions:
     done
 
 # Apply a list of catalog snapshots and releases
-apply-catalogs app version rc ocp_versions:
+apply-catalog app version rc ocp_versions skip_confirm="false" dry_run="true": (_validate_app app) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Validate app
-    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
-        echo "Error: app must be 'acm' or 'mce'" >&2
-        exit 1
-    fi
-
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build directory path
-    base_dir="{{justfile_directory()}}/acm-release-management"
-    app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
-    release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
-    snapshots_dir="${release_dir}/snapshots"
-    releases_dir="${release_dir}/releases"
+    # Build directory paths
+    read -r release_dir snapshots_dir releases_dir <<< $(just _catalog_dirs {{app}} {{version}} {{rc}})
 
-    # Parse OCP versions (e.g., "4.12,4.14-4.17" -> [4.12, 4.14, 4.15, 4.16, 4.17])
-    versions=()
-    IFS=',' read -ra items <<< "{{ocp_versions}}"
-    for item in "${items[@]}"; do
-        if [[ "$item" =~ ^([0-9]+)\.([0-9]+)-([0-9]+)\.([0-9]+)$ ]]; then
-            # Range format: 4.14-4.17
-            start_major="${BASH_REMATCH[1]}"
-            start_minor="${BASH_REMATCH[2]}"
-            end_major="${BASH_REMATCH[3]}"
-            end_minor="${BASH_REMATCH[4]}"
-
-            if [[ "$start_major" != "$end_major" ]]; then
-                echo "Error: range must have same major version: $item" >&2
-                exit 1
-            fi
-
-            for ((i=start_minor; i<=end_minor; i++)); do
-                versions+=("${start_major}.${i}")
-            done
-        elif [[ "$item" =~ ^[0-9]+\.[0-9]+$ ]]; then
-            # Single version: 4.12
-            versions+=("$item")
-        else
-            echo "Error: invalid OCP version format: $item" >&2
-            exit 1
-        fi
-    done
+    # Parse OCP versions
+    versions=($(just _parse_ocp_versions {{ocp_versions}}))
 
     # Apply snapshots and releases for each version
     for ocp_ver in "${versions[@]}"; do
         # Convert version format: 4.12 -> 4-12
         ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
 
-        snapshot_file="${snapshots_dir}/snapshot-{{app}}-fbc-ocm-${ocp_file_ver}-stage-${short_version}-z${patch}-rc{{rc}}.yaml"
-        release_file="${releases_dir}/{{app}}-fbc-ocm-${ocp_file_ver}-stage-${short_version}-z${patch}-rc{{rc}}.yaml"
+        # Build full component name with version suffix
+        base_component="{{app}}-fbc-ocm-${ocp_file_ver}-stage"
+        version_suffix="{{app}}-${short_version}-z${patch}-rc{{rc}}"
+        component_name="${base_component}-${version_suffix}"
+
+        snapshot_file="${snapshots_dir}/snapshot-${component_name}.yaml"
+        release_file="${releases_dir}/${component_name}.yaml"
 
         # Check files exist
         if [[ ! -f "$snapshot_file" ]]; then
@@ -522,12 +319,38 @@ apply-catalogs app version rc ocp_versions:
             exit 1
         fi
 
-        echo "📦 Applying OCP $ocp_ver..."
+        echo "📦 OCP $ocp_ver"
+        echo ""
         echo "  → Snapshot: $(basename "$snapshot_file")"
-        oc apply -f "$snapshot_file"
-
+        echo "---"
+        cat "$snapshot_file"
+        echo "---"
+        echo ""
         echo "  → Release: $(basename "$release_file")"
-        oc apply -f "$release_file"
+        echo "---"
+        cat "$release_file"
+        echo "---"
+        echo ""
+
+        # Confirm before applying
+        if [ "{{skip_confirm}}" != "true" ]; then
+            if [ "{{dry_run}}" = "true" ]; then
+                echo "Press Enter to continue (DRY-RUN), or Ctrl+C to cancel..." >&2
+            else
+                echo "Press Enter to continue (LIVE), or Ctrl+C to cancel..." >&2
+            fi
+            read -r
+        fi
+
+        # Apply both files
+        echo "Applying..."
+        if [ "{{dry_run}}" = "true" ]; then
+            oc apply --dry-run=server -f "$snapshot_file"
+            oc apply --dry-run=server -f "$release_file"
+        else
+            oc apply -f "$snapshot_file"
+            oc apply -f "$release_file"
+        fi
         echo ""
     done
 
@@ -536,28 +359,15 @@ apply-catalogs app version rc ocp_versions:
     
 
 # Setup catalog release structure: create directories, split snapshot, and generate Release YAMLs
-setup-catalogs app version snapshot rc:
+generate-catalog app version snapshot rc ocp_versions: (_validate_app app) _check_oc_cluster _setup_python_venv
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Validate app
-    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
-        echo "Error: app must be 'acm' or 'mce'" >&2
-        exit 1
-    fi
-
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build directory path
-    base_dir="{{justfile_directory()}}/acm-release-management"
-    app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
-    release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
-    snapshots_dir="${release_dir}/snapshots"
-    releases_dir="${release_dir}/releases"
+    # Build directory paths
+    read -r release_dir snapshots_dir releases_dir <<< $(just _catalog_dirs {{app}} {{version}} {{rc}})
 
     echo "📁 Setting up catalog directories..."
     echo "   Base: ${release_dir}"
@@ -582,46 +392,49 @@ setup-catalogs app version snapshot rc:
     # Split the snapshot using split_snapshot.py
     echo "🔨 Splitting snapshot into individual components..."
     split_script="{{justfile_directory()}}/lib/split_snapshot.py"
+    python_bin="{{justfile_directory()}}/.venv/bin/python"
 
     if [ ! -f "$split_script" ]; then
         echo "❌ Error: split_snapshot.py not found at $split_script" >&2
         exit 1
     fi
 
-    python3 "$split_script" "$snapshot_file" "$snapshots_dir"
+    # Parse and convert OCP versions for Python script (space-separated -> comma-separated)
+    versions_space=$(just _parse_ocp_versions {{ocp_versions}})
+    versions_comma=$(echo "$versions_space" | tr ' ' ',')
+
+    "$python_bin" "$split_script" "$snapshot_file" "$snapshots_dir" "$versions_comma"
     echo ""
 
     # Generate Release YAML files for each snapshot
     echo "📝 Generating Release YAML files..."
     namespace="crt-redhat-acm-tenant"
     release_plan="{{app}}-release-plan-stage"
-    author=$(git config user.email 2>/dev/null | cut -d'@' -f1)
+    author=$(just _get_author)
 
-    if [ -z "$author" ]; then
-        echo "❌ Failed to get git user.email. Please configure git:" >&2
-        echo "   git config user.name \"Your Name\"" >&2
-        echo "   git config user.email \"your.email@example.com\"" >&2
-        exit 1
-    fi
-
-    # Build version suffix
-    version_suffix="${short_version}-z${patch}-rc{{rc}}"
+    # Build version suffix: -acm-212-z42-rc1
+    version_suffix="{{app}}-${short_version}-z${patch}-rc{{rc}}"
 
     count=0
     for snapshot_file in "$snapshots_dir"/snapshot-*.yaml; do
         [ -f "$snapshot_file" ] || continue
 
-        # Extract component name from snapshot filename
-        component_name=$(basename "$snapshot_file" .yaml | sed 's/^snapshot-//')
+        # Extract base component name from snapshot filename
+        base_component=$(basename "$snapshot_file" .yaml | sed 's/^snapshot-//')
 
-        # Add version suffix to create unique names
-        snapshot_name="${component_name}-${version_suffix}"
-        release_name="${component_name}-${version_suffix}"
+        # Skip if already has version suffix (from previous run)
+        if [[ "$base_component" == *"-${version_suffix}" ]]; then
+            continue
+        fi
+
+        # Append version suffix
+        snapshot_name="${base_component}-${version_suffix}"
+        release_name="${base_component}-${version_suffix}"
 
         # Update the snapshot name in the snapshot file
         yq eval -i ".metadata.name = \"${snapshot_name}\"" "$snapshot_file"
 
-        # Rename snapshot file to include version
+        # Rename snapshot file to include version suffix
         versioned_snapshot_file="${snapshots_dir}/snapshot-${snapshot_name}.yaml"
         mv "$snapshot_file" "$versioned_snapshot_file"
 
@@ -661,7 +474,7 @@ cleanup:
     fi
 
 # Clone release management repo and create a branch
-clone-release-mgmt branch_name cert_file="":
+clone-release-mgmt branch_name cert_file="": _check_gitlab_access
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -694,11 +507,12 @@ clone-release-mgmt branch_name cert_file="":
     fi
 
 # Release: generate YAML, save to disk, and apply to cluster
-[arg("skip_confirm", long="false")]
+[arg("skip_confirm", long="skip_confirm")]
 [arg("cert_file", long="cert_file")]
 [arg("rc", long="rc")]
 [arg("dry_run", long="dry_run")]
-release target type app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="": (_validate type app rc)
+[arg("ocp_versions", long="ocp_versions")]
+release target type app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="" ocp_versions="": (_validate type app rc) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -708,17 +522,23 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
         exit 1
     fi
 
+    # Validate catalog-specific requirements
+    if [[ "{{target}}" == "catalog" && -z "{{ocp_versions}}" ]]; then
+        echo "Error: ocp_versions parameter is required for catalog releases" >&2
+        exit 1
+    fi
+
     # Parse version
-    major=$(echo "{{version}}" | cut -d. -f1)
-    minor=$(echo "{{version}}" | cut -d. -f2)
-    patch=$(echo "{{version}}" | cut -d. -f3)
-    short_version="${major}${minor}"
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # If workspace is default, clone the release management repo
     workspace_dir="{{workspace}}"
     if [ "$workspace_dir" = "." ]; then
         # Clone release management repo and create branch
-        branch_name="{{type}}-release-rc{{rc}}"
+        branch_name="{{type}}-release-{{app}}-${short_version}-z${patch}"
+        if [ "{{type}}" = "stage" ]; then
+            branch_name="${branch_name}-rc{{rc}}"
+        fi
 
         just clone-release-mgmt "$branch_name" "{{cert_file}}"
         workspace_dir="acm-release-management"
@@ -735,39 +555,46 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
         suffix="prod-z${patch}"
     fi
 
-    # Create directory if it doesn't exist
-    mkdir -p "$release_dir"
-    echo "📁 Saving release files to: $release_dir" >&2
+    # Branch based on target type
+    if [ "{{target}}" = "catalog" ]; then
+        # Catalog workflow: setup multi-file structure and apply
+        echo "📦 Setting up catalog release..." >&2
+        just debug={{debug}} generate-catalog {{app}} {{version}} {{snapshot}} {{rc}} {{ocp_versions}}
 
-    # Fetch and save snapshot from cluster first (fail if not found)
-    echo "  Fetching snapshot from cluster..." >&2
-    snapshot_file="${release_dir}/snapshot-{{app}}-${short_version}-{{target}}-${suffix}.yaml"
-    oc get snapshot {{snapshot}} -n crt-redhat-acm-tenant -o yaml > "$snapshot_file" || {
-        echo "❌ Failed to fetch snapshot {{snapshot}} from cluster" >&2
-        exit 1
-    }
-    echo "  ✓ Saved: $(basename "$snapshot_file")" >&2
+        echo "" >&2
+        echo "📋 Catalog files generated in: $workspace_dir" >&2
+        echo "" >&2
 
-    # Generate the YAML
-    echo "  Generating {{target}}..." >&2
-    target_yaml=$(just debug={{debug}} generate-{{target}} {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
-
-    # Show and confirm before saving
-    echo "" >&2
-    just _show_and_confirm "$target_yaml" {{skip_confirm}} {{dry_run}}
-
-    # Save to disk after confirmation
-    target_file="${release_dir}/{{app}}-${short_version}-{{target}}-${suffix}.yaml"
-    echo "$target_yaml" > "$target_file"
-    echo "" >&2
-    echo "  ✓ Saved: $(basename "$target_file")" >&2
-    echo "✅ Release {{target}} saved successfully!" >&2
-    echo "   Directory: $release_dir" >&2
-
-    # Apply to cluster
-    echo "" >&2
-    if [ "{{dry_run}}" = "true" ]; then
-        echo "$target_yaml" | oc apply --dry-run=server -f -
+        # Apply catalogs (confirmation happens inside apply-catalog)
+        just debug={{debug}} apply-catalog {{app}} {{version}} {{rc}} {{ocp_versions}} {{skip_confirm}} {{dry_run}}
     else
-        echo "$target_yaml" | oc apply -f -
+        # Payload/Bundle workflow: single YAML generation and apply
+        # Create directory if it doesn't exist
+        mkdir -p "$release_dir"
+        echo "📁 Saving release files to: $release_dir" >&2
+
+        # Fetch and save snapshot from cluster first (fail if not found)
+        echo "  Fetching snapshot from cluster..." >&2
+        snapshot_file="${release_dir}/snapshot-{{app}}-${short_version}-{{target}}-${suffix}.yaml"
+        oc get snapshot {{snapshot}} -n crt-redhat-acm-tenant -o yaml > "$snapshot_file" || {
+            echo "❌ Failed to fetch snapshot {{snapshot}} from cluster" >&2
+            exit 1
+        }
+        echo "  ✓ Saved: $(basename "$snapshot_file")" >&2
+
+        # Generate the YAML
+        echo "  Generating {{target}}..." >&2
+        target_yaml=$(just debug={{debug}} generate-{{target}} {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
+
+        # Save to disk
+        target_file="${release_dir}/{{app}}-${short_version}-{{target}}-${suffix}.yaml"
+        echo "$target_yaml" > "$target_file"
+        echo "" >&2
+        echo "  ✓ Saved: $(basename "$target_file")" >&2
+        echo "✅ Release {{target}} saved successfully!" >&2
+        echo "   Directory: $release_dir" >&2
+
+        # Apply to cluster
+        echo "" >&2
+        just _apply "$target_yaml" {{skip_confirm}} {{dry_run}}
     fi
