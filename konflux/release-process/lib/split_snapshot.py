@@ -59,13 +59,14 @@ def create_single_component_snapshot(original_snapshot, component, base_name, na
     return new_snapshot
 
 
-def split_snapshot(input_file, output_dir=None):
+def split_snapshot(input_file, output_dir=None, ocp_filter=None):
     """
     Split a snapshot YAML file into individual component snapshots.
 
     Args:
         input_file: Path to input snapshot YAML file
         output_dir: Directory to write output files (default: same as input file)
+        ocp_filter: Optional list of OCP versions to filter (e.g., ['4.12', '4.14'])
 
     Returns:
         List of created file paths
@@ -92,6 +93,20 @@ def split_snapshot(input_file, output_dir=None):
     if not components:
         print("Warning: No components found in snapshot")
         return []
+
+    # Filter components by OCP version if specified
+    if ocp_filter:
+        # Convert OCP versions to filename format (4.12 -> 4-12)
+        ocp_patterns = [v.replace('.', '-') for v in ocp_filter]
+        filtered_components = []
+        for component in components:
+            component_name = component.get('name', '')
+            # Check if component name contains any of the OCP patterns
+            # Pattern: {app}-fbc-ocm-{ocp_version}-stage-...
+            if any(f'-fbc-ocm-{pattern}-' in component_name for pattern in ocp_patterns):
+                filtered_components.append(component)
+        components = filtered_components
+        print(f"Filtering for OCP versions: {', '.join(ocp_filter)}")
 
     print(f"Processing snapshot: {original_name}")
     print(f"Found {len(components)} components")
@@ -147,15 +162,24 @@ def main():
     """Main entry point."""
     # Parse arguments
     if len(sys.argv) < 2:
-        print("Usage: split_snapshot.py <input_snapshot.yaml> [output_directory]")
+        print("Usage: split_snapshot.py <input_snapshot.yaml> [output_directory] [ocp_versions]")
+        print()
+        print("Arguments:")
+        print("  ocp_versions: Optional comma-separated OCP versions to filter (e.g., '4.12,4.14,4.15')")
         print()
         print("Example:")
         print("  ./split_snapshot.py snapshot.yaml")
         print("  ./split_snapshot.py snapshot.yaml ./output")
+        print("  ./split_snapshot.py snapshot.yaml ./output '4.12,4.14'")
         sys.exit(1)
 
     input_file = sys.argv[1]
     output_dir = sys.argv[2] if len(sys.argv) > 2 else None
+    ocp_filter = None
+
+    if len(sys.argv) > 3 and sys.argv[3]:
+        # Parse comma-separated OCP versions
+        ocp_filter = [v.strip() for v in sys.argv[3].split(',')]
 
     # Check input file exists
     if not os.path.exists(input_file):
@@ -163,7 +187,7 @@ def main():
         sys.exit(1)
 
     # Split the snapshot
-    created_files = split_snapshot(input_file, output_dir)
+    created_files = split_snapshot(input_file, output_dir, ocp_filter)
 
     # Summary
     print("="*60)

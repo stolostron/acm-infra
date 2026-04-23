@@ -301,8 +301,13 @@ apply-catalog app version rc ocp_versions skip_confirm="false" dry_run="true": (
         # Convert version format: 4.12 -> 4-12
         ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
 
-        snapshot_file="${snapshots_dir}/snapshot-{{app}}-fbc-ocm-${ocp_file_ver}-stage-${short_version}-z${patch}-rc{{rc}}.yaml"
-        release_file="${releases_dir}/{{app}}-fbc-ocm-${ocp_file_ver}-stage-${short_version}-z${patch}-rc{{rc}}.yaml"
+        # Build full component name with version suffix
+        base_component="{{app}}-fbc-ocm-${ocp_file_ver}-stage"
+        version_suffix="{{app}}-${short_version}-z${patch}-rc{{rc}}"
+        component_name="${base_component}-${version_suffix}"
+
+        snapshot_file="${snapshots_dir}/snapshot-${component_name}.yaml"
+        release_file="${releases_dir}/${component_name}.yaml"
 
         # Check files exist
         if [[ ! -f "$snapshot_file" ]]; then
@@ -354,7 +359,7 @@ apply-catalog app version rc ocp_versions skip_confirm="false" dry_run="true": (
     
 
 # Setup catalog release structure: create directories, split snapshot, and generate Release YAMLs
-generate-catalog app version snapshot rc: (_validate_app app) _check_oc_cluster _setup_python_venv
+generate-catalog app version snapshot rc ocp_versions: (_validate_app app) _check_oc_cluster _setup_python_venv
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -394,7 +399,11 @@ generate-catalog app version snapshot rc: (_validate_app app) _check_oc_cluster 
         exit 1
     fi
 
-    "$python_bin" "$split_script" "$snapshot_file" "$snapshots_dir"
+    # Parse and convert OCP versions for Python script (space-separated -> comma-separated)
+    versions_space=$(just _parse_ocp_versions {{ocp_versions}})
+    versions_comma=$(echo "$versions_space" | tr ' ' ',')
+
+    "$python_bin" "$split_script" "$snapshot_file" "$snapshots_dir" "$versions_comma"
     echo ""
 
     # Generate Release YAML files for each snapshot
@@ -403,24 +412,29 @@ generate-catalog app version snapshot rc: (_validate_app app) _check_oc_cluster 
     release_plan="{{app}}-release-plan-stage"
     author=$(just _get_author)
 
-    # Build version suffix
-    version_suffix="${short_version}-z${patch}-rc{{rc}}"
+    # Build version suffix: -acm-212-z42-rc1
+    version_suffix="{{app}}-${short_version}-z${patch}-rc{{rc}}"
 
     count=0
     for snapshot_file in "$snapshots_dir"/snapshot-*.yaml; do
         [ -f "$snapshot_file" ] || continue
 
-        # Extract component name from snapshot filename
-        component_name=$(basename "$snapshot_file" .yaml | sed 's/^snapshot-//')
+        # Extract base component name from snapshot filename
+        base_component=$(basename "$snapshot_file" .yaml | sed 's/^snapshot-//')
 
-        # Add version suffix to create unique names
-        snapshot_name="${component_name}-${version_suffix}"
-        release_name="${component_name}-${version_suffix}"
+        # Skip if already has version suffix (from previous run)
+        if [[ "$base_component" == *"-${version_suffix}" ]]; then
+            continue
+        fi
+
+        # Append version suffix
+        snapshot_name="${base_component}-${version_suffix}"
+        release_name="${base_component}-${version_suffix}"
 
         # Update the snapshot name in the snapshot file
         yq eval -i ".metadata.name = \"${snapshot_name}\"" "$snapshot_file"
 
-        # Rename snapshot file to include version
+        # Rename snapshot file to include version suffix
         versioned_snapshot_file="${snapshots_dir}/snapshot-${snapshot_name}.yaml"
         mv "$snapshot_file" "$versioned_snapshot_file"
 
@@ -493,7 +507,7 @@ clone-release-mgmt branch_name cert_file="": _check_gitlab_access
     fi
 
 # Release: generate YAML, save to disk, and apply to cluster
-[arg("skip_confirm", long="false")]
+[arg("skip_confirm", long="skip_confirm")]
 [arg("cert_file", long="cert_file")]
 [arg("rc", long="rc")]
 [arg("dry_run", long="dry_run")]
@@ -545,7 +559,7 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
     if [ "{{target}}" = "catalog" ]; then
         # Catalog workflow: setup multi-file structure and apply
         echo "📦 Setting up catalog release..." >&2
-        just debug={{debug}} generate-catalog {{app}} {{version}} {{snapshot}} {{rc}}
+        just debug={{debug}} generate-catalog {{app}} {{version}} {{snapshot}} {{rc}} {{ocp_versions}}
 
         echo "" >&2
         echo "📋 Catalog files generated in: $workspace_dir" >&2
