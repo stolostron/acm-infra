@@ -283,7 +283,7 @@ retrieve-fbc-catalog-images app version rc ocp_versions: (_validate_app app) _ch
     done
 
 # Apply a list of catalog snapshots and releases
-apply-catalog app version rc ocp_versions dry_run="true": (_validate_app app) _check_oc_cluster
+apply-catalog app version rc ocp_versions skip_confirm="false" dry_run="true": (_validate_app app) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -314,18 +314,36 @@ apply-catalog app version rc ocp_versions dry_run="true": (_validate_app app) _c
             exit 1
         fi
 
-        echo "📦 Applying OCP $ocp_ver..."
+        echo "📦 OCP $ocp_ver"
+        echo ""
         echo "  → Snapshot: $(basename "$snapshot_file")"
-        if [ "{{dry_run}}" = "true" ]; then
-            oc apply --dry-run=server -f "$snapshot_file"
-        else
-            oc apply -f "$snapshot_file"
+        echo "---"
+        cat "$snapshot_file"
+        echo "---"
+        echo ""
+        echo "  → Release: $(basename "$release_file")"
+        echo "---"
+        cat "$release_file"
+        echo "---"
+        echo ""
+
+        # Confirm before applying
+        if [ "{{skip_confirm}}" != "true" ]; then
+            if [ "{{dry_run}}" = "true" ]; then
+                echo "Press Enter to continue (DRY-RUN), or Ctrl+C to cancel..." >&2
+            else
+                echo "Press Enter to continue (LIVE), or Ctrl+C to cancel..." >&2
+            fi
+            read -r
         fi
 
-        echo "  → Release: $(basename "$release_file")"
+        # Apply both files
+        echo "Applying..."
         if [ "{{dry_run}}" = "true" ]; then
+            oc apply --dry-run=server -f "$snapshot_file"
             oc apply --dry-run=server -f "$release_file"
         else
+            oc apply -f "$snapshot_file"
             oc apply -f "$release_file"
         fi
         echo ""
@@ -533,17 +551,8 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
         echo "📋 Catalog files generated in: $workspace_dir" >&2
         echo "" >&2
 
-        # Apply catalogs if not dry-run
-        if [ "{{skip_confirm}}" != "true" ]; then
-            if [ "{{dry_run}}" = "true" ]; then
-                echo "Press Enter to continue (DRY-RUN), or Ctrl+C to cancel..." >&2
-            else
-                echo "Press Enter to continue (LIVE), or Ctrl+C to cancel..." >&2
-            fi
-            read -r
-        fi
-
-        just debug={{debug}} apply-catalog {{app}} {{version}} {{rc}} {{ocp_versions}} {{dry_run}}
+        # Apply catalogs (confirmation happens inside apply-catalog)
+        just debug={{debug}} apply-catalog {{app}} {{version}} {{rc}} {{ocp_versions}} {{skip_confirm}} {{dry_run}}
     else
         # Payload/Bundle workflow: single YAML generation and apply
         # Create directory if it doesn't exist
