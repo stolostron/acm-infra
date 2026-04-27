@@ -8,15 +8,11 @@ _validate_app app:
     fi
 
 # Private: validate common inputs
-_validate type app rc:
+_validate type app rc: (_validate_app app)
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ "{{type}}" != "stage" && "{{type}}" != "prod" ]]; then
         echo "Error: type must be 'stage' or 'prod'" >&2
-        exit 1
-    fi
-    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
-        echo "Error: app must be 'acm' or 'mce'" >&2
         exit 1
     fi
     if [[ "{{type}}" == "stage" && -z "{{rc}}" ]]; then
@@ -258,3 +254,26 @@ _check_gitlab_access:
     fi
 
     echo "✅ GitLab access verified" >&2
+
+# Private: check GitHub access via gh CLI
+_check_github_access:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "🔐 Checking GitHub CLI access..." >&2
+
+    # Check if gh is installed
+    if ! command -v gh &>/dev/null; then
+        echo "❌ gh CLI not found" >&2
+        echo "   Install: https://cli.github.com/" >&2
+        exit 1
+    fi
+
+    # Check authentication
+    if ! gh auth status &>/dev/null; then
+        echo "❌ Not authenticated with GitHub CLI" >&2
+        echo "   Run: gh auth login" >&2
+        exit 1
+    fi
+
+    echo "✅ GitHub CLI access verified" >&2
