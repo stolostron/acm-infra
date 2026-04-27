@@ -379,7 +379,186 @@ check-release release:
 
         echo "$(date): Released='$STATUS', Progressing='$PROGRESSING', waiting..."
         sleep 30
-    done 
+    done
+
+# checking Konflux commit pipeline runs with notifications
+check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
+    #!/usr/bin/env bash
+
+    # Build label selector
+    if [[ -n "{{app_name}}" ]]; then
+        SELECTOR="pipelinesascode.tekton.dev/sha={{commit_sha}},appstudio.openshift.io/application={{app_name}}"
+        HEADER="Monitoring commit {{commit_sha}} in {{app_name}}"
+    else
+        SELECTOR="pipelinesascode.tekton.dev/sha={{commit_sha}}"
+        HEADER="Monitoring commit {{commit_sha}}"
+    fi
+
+    FIRST_RUN=true
+    PREV_LINES=0
+    MAX_RUNS=0
+
+    while true; do
+        if [[ "$FIRST_RUN" == "true" ]]; then
+            FIRST_RUN=false
+        else
+            # Move cursor up and clear previous output
+            for ((i=0; i<PREV_LINES; i++)); do
+                echo -ne "\033[1A\033[K"
+            done
+        fi
+
+        LINE_COUNT=0
+        echo "$HEADER"; ((LINE_COUNT++))
+        echo ""; ((LINE_COUNT++))
+
+        RESULTS=$(oc get pipelineruns -n "{{namespace}}" -l "$SELECTOR" -o json 2>/dev/null | \
+            jq -r '.items[] | {name: .metadata.name, status: (.status.conditions[] | select(.type == "Succeeded") | .status), reason: (.status.conditions[] | select(.type == "Succeeded") | .reason)} | "\(.name)|\(.status)|\(.reason)"')
+
+        if [[ -z "$RESULTS" ]]; then
+            if [[ $MAX_RUNS -eq 0 ]]; then
+                echo "$(date): No PipelineRuns found - commit may be old or already cleaned up"; ((LINE_COUNT++))
+                exit 1
+            else
+                echo "$(date): All $MAX_RUNS PipelineRuns completed and garbage collected"; ((LINE_COUNT++))
+                notify-send "Commit Builds Complete" "Commit {{commit_sha}} - All $MAX_RUNS builds finished and cleaned up"
+                which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+                exit 0
+            fi
+        fi
+
+        TOTAL=0
+        SUCCESS=0
+        FAILED=0
+        RUNNING=0
+        FAILED_LIST=""
+
+        while IFS='|' read -r NAME STATUS REASON; do
+            ((TOTAL++))
+            case "$STATUS" in
+                "True")
+                    ((SUCCESS++))
+                    echo "  ✅ $NAME: $STATUS ($REASON)"; ((LINE_COUNT++))
+                    ;;
+                "False")
+                    ((FAILED++))
+                    FAILED_LIST="$FAILED_LIST\n  - $NAME ($REASON)"
+                    echo "  ❌ $NAME: $STATUS ($REASON)"; ((LINE_COUNT++))
+                    ;;
+                *)
+                    ((RUNNING++))
+                    echo "  ⏳ $NAME: $STATUS ($REASON)"; ((LINE_COUNT++))
+                    ;;
+            esac
+        done <<< "$RESULTS"
+
+        # Track max runs seen
+        if [[ $TOTAL -gt $MAX_RUNS ]]; then
+            MAX_RUNS=$TOTAL
+        fi
+
+        echo "$(date): Total=$TOTAL/$MAX_RUNS Success=$SUCCESS Failed=$FAILED Running=$RUNNING"; ((LINE_COUNT++))
+
+        if [[ $RUNNING -eq 0 ]]; then
+            notify-send "Commit Builds Complete" "Commit {{commit_sha}} - All $TOTAL builds finished (Success: $SUCCESS, Failed: $FAILED)"
+            which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+            exit 0
+        fi
+
+        # Countdown to next check
+        echo ""; ((LINE_COUNT++))
+        PREV_LINES=$LINE_COUNT
+        for ((countdown=30; countdown>0; countdown--)); do
+            echo -ne "\033[1A\033[K"
+            echo "Next check in ${countdown}s..."
+            sleep 1
+        done
+    done
+
+# checking GitHub action and PR merge status with notifications
+check-pr pr_number repo="stolostron/acm-mce-operator-catalogs" workflow="Gen Catalog Content When Requested":
+    #!/usr/bin/env bash
+
+    # Get PR branch name
+    PR_DATA=$(gh pr view "{{pr_number}}" --repo "{{repo}}" --json headRefName,title 2>/dev/null)
+    BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
+    PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+
+    if [[ -z "$BRANCH" ]]; then
+        echo "Failed to get PR #{{pr_number}} info"
+        exit 1
+    fi
+
+    echo "Monitoring GitHub action and PR..."
+    echo "  Repository: {{repo}}"
+    echo "  PR: #{{pr_number}} - $PR_TITLE"
+    echo "  Branch: $BRANCH"
+    echo "  Workflow: {{workflow}}"
+    echo ""
+
+    # Wait for workflow to complete
+    while true; do
+        RUN_DATA=$(gh run list --repo "{{repo}}" --branch "$BRANCH" --workflow "{{workflow}}" --json conclusion,status,workflowName,databaseId --limit 5 2>/dev/null)
+        RUN_INFO=$(echo "$RUN_DATA" | jq -r '.[0] | {status: .status, conclusion: .conclusion, id: .databaseId} | @json' 2>/dev/null)
+
+        if [[ -z "$RUN_INFO" || "$RUN_INFO" == "null" ]]; then
+            echo "$(date): No workflow run found for branch $BRANCH"
+            sleep 30
+            continue
+        fi
+
+        STATUS=$(echo "$RUN_INFO" | jq -r '.status')
+        CONCLUSION=$(echo "$RUN_INFO" | jq -r '.conclusion')
+        RUN_ID=$(echo "$RUN_INFO" | jq -r '.id')
+
+        echo "$(date): Workflow run $RUN_ID - Status=$STATUS, Conclusion=$CONCLUSION"
+
+        if [[ "$STATUS" == "completed" ]]; then
+            if [[ "$CONCLUSION" == "success" ]]; then
+                break
+            else
+                notify-send "GitHub Action Failed" "PR #{{pr_number}} workflow failed: $CONCLUSION"
+                which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+                exit 1
+            fi
+        fi
+
+        sleep 30
+    done
+
+    echo ""
+    echo "Workflow succeeded! Monitoring PR merge..."
+    echo ""
+
+    # Wait for PR merge
+    while true; do
+        PR_STATE=$(gh pr view "{{pr_number}}" --repo "{{repo}}" --json state,mergedAt 2>/dev/null)
+
+        if [[ -z "$PR_STATE" ]]; then
+            echo "$(date): Failed to get PR status"
+            sleep 30
+            continue
+        fi
+
+        STATE=$(echo "$PR_STATE" | jq -r '.state')
+        MERGED_AT=$(echo "$PR_STATE" | jq -r '.mergedAt')
+
+        echo "$(date): PR #{{pr_number}} - State=$STATE"
+
+        if [[ "$STATE" == "MERGED" ]]; then
+            notify-send "PR Merged" "PR #{{pr_number}} has been merged!"
+            which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+            exit 0
+        fi
+
+        if [[ "$STATE" == "CLOSED" ]]; then
+            notify-send "PR Closed" "PR #{{pr_number}} was closed without merging"
+            which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+            exit 1
+        fi
+
+        sleep 30
+    done
 
 # Setup catalog release structure: create directories, split snapshot, and generate Release YAMLs
 generate-catalog app version snapshot rc ocp_versions: (_validate_app app) _check_oc_cluster _setup_python_venv
@@ -545,14 +724,16 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
         exit 1
     fi
 
-    # Validate catalog-specific requirements
-    if [[ "{{target}}" == "catalog" && -z "{{ocp_versions}}" ]]; then
-        echo "Error: ocp_versions parameter is required for catalog releases" >&2
-        exit 1
-    fi
-
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
+
+    # Auto-detect OCP versions for catalog if not provided
+    ocp_versions_resolved="{{ocp_versions}}"
+    if [[ "{{target}}" == "catalog" && -z "{{ocp_versions}}" ]]; then
+        echo "🔍 Auto-detecting OCP versions from catalog config..." >&2
+        ocp_versions_resolved=$(just _get_ocp_versions {{app}} {{version}})
+        echo "  ✓ Detected OCP versions: ${ocp_versions_resolved}" >&2
+    fi
 
     # If workspace is default, clone the release management repo
     workspace_dir="{{workspace}}"
@@ -582,14 +763,14 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
     if [ "{{target}}" = "catalog" ]; then
         # Catalog workflow: setup multi-file structure and apply
         echo "📦 Setting up catalog release..." >&2
-        just debug={{debug}} generate-catalog {{app}} {{version}} {{snapshot}} {{rc}} {{ocp_versions}}
+        just debug={{debug}} generate-catalog {{app}} {{version}} {{snapshot}} {{rc}} "${ocp_versions_resolved}"
 
         echo "" >&2
         echo "📋 Catalog files generated in: $workspace_dir" >&2
         echo "" >&2
 
         # Apply catalogs (confirmation happens inside apply-catalog)
-        just debug={{debug}} apply-catalog {{app}} {{version}} {{rc}} {{ocp_versions}} {{skip_confirm}} {{dry_run}}
+        just debug={{debug}} apply-catalog {{app}} {{version}} {{rc}} "${ocp_versions_resolved}" {{skip_confirm}} {{dry_run}}
     else
         # Payload/Bundle workflow: single YAML generation and apply
         # Create directory if it doesn't exist
@@ -799,6 +980,162 @@ update-bundle-snapshot type app version rc="" skip_confirm="false" dry_run="true
         pr_url=$(gh pr create \
             --base "$release_branch" \
             --title "Update snapshot for {{app}} {{version}}" \
+            --body "${pr_body}")
+
+        echo "" >&2
+        echo "✅ Pull request created: $pr_url" >&2
+    fi
+
+# Update catalog request with bundle container image
+[arg("rc", long="rc")]
+[arg("skip_confirm", long="skip_confirm")]
+[arg("dry_run", long="dry_run")]
+update-catalog-request type app version rc="" skip_confirm="false" dry_run="true": (_validate type app rc) _check_github_access
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Parse version
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
+
+    # Build paths to bundle snapshot file
+    workspace_dir="{{workspace}}"
+    if [ "$workspace_dir" = "." ]; then
+        workspace_dir="acm-release-management"
+    fi
+
+    app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
+    release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
+
+    if [ "{{type}}" = "stage" ]; then
+        release_dir="${release_dir}/rc{{rc}}"
+        suffix="stage-z${patch}-rc{{rc}}"
+    else
+        suffix="prod-z${patch}"
+    fi
+
+    bundle_snapshot_file="${release_dir}/snapshot-{{app}}-${short_version}-bundle-${suffix}.yaml"
+
+    # Verify bundle snapshot file exists
+    if [ ! -f "$bundle_snapshot_file" ]; then
+        echo "❌ Bundle snapshot file not found: $bundle_snapshot_file" >&2
+        echo "   Run 'just release bundle {{type}} {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
+        exit 1
+    fi
+
+    # Extract container image from bundle snapshot
+    container_image=$(yq '.spec.components[].containerImage' "$bundle_snapshot_file")
+
+    if [ -z "$container_image" ]; then
+        echo "❌ No container image found in bundle snapshot" >&2
+        exit 1
+    fi
+
+    echo "📦 Updating catalog request..." >&2
+    echo "  Bundle snapshot: $(basename "$bundle_snapshot_file")" >&2
+    echo "  Container image: ${container_image}" >&2
+
+    # Determine catalog repo branch
+    if [ "{{app}}" = "acm" ]; then
+        catalog_branch="acm-redhat-operators"
+    else
+        catalog_branch="mce-redhat-operators"
+    fi
+
+    echo "  Repository: stolostron/acm-mce-operator-catalogs" >&2
+    echo "  Branch: ${catalog_branch}" >&2
+
+    # Clone or update catalog repo
+    catalog_dir="{{justfile_directory()}}/bundle-repos/acm-mce-operator-catalogs"
+    mkdir -p "{{justfile_directory()}}/bundle-repos"
+
+    if [ ! -d "$catalog_dir" ]; then
+        echo "  Cloning acm-mce-operator-catalogs..." >&2
+        git clone "git@github.com:stolostron/acm-mce-operator-catalogs.git" "$catalog_dir"
+    fi
+
+    cd "$catalog_dir"
+
+    # Fetch and checkout catalog branch
+    echo "  Fetching latest from origin..." >&2
+    git fetch origin
+
+    if ! git rev-parse --verify "origin/${catalog_branch}" &>/dev/null; then
+        echo "❌ Branch ${catalog_branch} does not exist in remote" >&2
+        echo "   Available branches:" >&2
+        git branch -r | grep -v HEAD | sed 's/origin\///' >&2
+        exit 1
+    fi
+
+    # Checkout and update catalog branch
+    if git show-ref --verify --quiet "refs/heads/${catalog_branch}"; then
+        git checkout "$catalog_branch"
+        echo "  Pulling latest changes..." >&2
+        git pull origin "$catalog_branch"
+    else
+        git checkout -b "$catalog_branch" "origin/${catalog_branch}"
+    fi
+
+    # Update catalog-request.yaml
+    echo "🔍 Updating catalog-request.yaml..." >&2
+
+    # Set container image in additional-bundles[0]
+    yq eval -i ".additional-bundles[0] = \"${container_image}\"" catalog-request.yaml
+
+    # Update request-time to current timestamp
+    current_time=$(date)
+    yq eval -i ".request-time = \"${current_time}\"" catalog-request.yaml
+
+    commit_msg="Update catalog request for {{app}} {{version}}"$'\n\n'"Bundle: ${container_image}"
+
+    # Commit and create PR
+    if [ "{{dry_run}}" = "true" ]; then
+        echo "" >&2
+        echo "🏃 DRY-RUN: Would create PR with:" >&2
+        echo "  Bundle: ${container_image}" >&2
+        echo "  Request time: ${current_time}" >&2
+        echo "  Branch: catalog-update-{{app}}-${short_version}-z${patch}$([ "{{type}}" = "stage" ] && echo "-rc{{rc}}" || echo "")" >&2
+        echo "  Title: Update catalog request for {{app}} {{version}}" >&2
+        echo "" >&2
+        echo "Run with \`--dry_run false\` to create actual PR" >&2
+    else
+        # Create feature branch
+        feature_branch="catalog-update-{{app}}-${short_version}-z${patch}"
+        if [ "{{type}}" = "stage" ]; then
+            feature_branch="${feature_branch}-rc{{rc}}"
+        fi
+
+        # Check if branch exists and handle
+        if git show-ref --verify --quiet "refs/heads/${feature_branch}"; then
+            echo "⚠️  Branch ${feature_branch} already exists" >&2
+            if [ "{{skip_confirm}}" != "true" ]; then
+                echo "Press Enter to delete and recreate, or Ctrl+C to cancel..." >&2
+                read -r
+            fi
+            git checkout "$catalog_branch"
+            git branch -D "$feature_branch"
+        fi
+
+        echo "📝 Creating commit..." >&2
+        git checkout -b "$feature_branch"
+        git add catalog-request.yaml
+
+        # Get git author info and build full commit message
+        author=$(just _get_author)
+        full_commit_msg="${commit_msg}"
+        full_commit_msg="${full_commit_msg}"$'\n\n'"Signed-off-by: $(git config user.name) $(git config user.email)"
+        full_commit_msg="${full_commit_msg}"$'\n'"Co-Authored-By: Claude Sonnet 4 point 5 noreply at anthropic.com"
+
+        git commit -m "${full_commit_msg}"
+
+        echo "🚀 Pushing to origin..." >&2
+        git push -u origin "$feature_branch"
+
+        echo "📬 Creating pull request..." >&2
+        pr_body="Summary: Update catalog request for {{app}} {{version}} with bundle ${container_image}"
+
+        pr_url=$(gh pr create \
+            --base "$catalog_branch" \
+            --title "Update catalog request for {{app}} {{version}}" \
             --body "${pr_body}")
 
         echo "" >&2

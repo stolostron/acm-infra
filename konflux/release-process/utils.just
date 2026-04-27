@@ -277,3 +277,47 @@ _check_github_access:
     fi
 
     echo "✅ GitHub CLI access verified" >&2
+
+# Private: get OCP versions from catalog config for a given app and version
+_get_ocp_versions app version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Parse version to get major.minor
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
+
+    # Determine catalog repo branch and config file
+    if [ "{{app}}" = "acm" ]; then
+        catalog_branch="acm-redhat-operators"
+        config_file="acm-redhat-operators-config.yaml"
+    else
+        catalog_branch="mce-redhat-operators"
+        config_file="mce-redhat-operators-config.yaml"
+    fi
+
+    # Clone or update catalog repo
+    catalog_dir="{{justfile_directory()}}/bundle-repos/acm-mce-operator-catalogs"
+    mkdir -p "{{justfile_directory()}}/bundle-repos"
+
+    if [ ! -d "$catalog_dir" ]; then
+        git clone "git@github.com:stolostron/acm-mce-operator-catalogs.git" "$catalog_dir" >&2
+    fi
+
+    cd "$catalog_dir"
+    git fetch origin >&2
+    git checkout "$catalog_branch" >&2
+    git pull origin "$catalog_branch" >&2
+
+    # Extract OCP versions for this release version
+    version_key="v${major}.${minor}"
+    ocp_versions_yaml=$(yq ".packages[0].versions[] | select(.version == \"${version_key}\") | .catalogs[]" "config/${config_file}")
+
+    if [ -z "$ocp_versions_yaml" ]; then
+        echo "❌ No catalog config found for version ${version_key}" >&2
+        echo "   Available versions:" >&2
+        yq '.packages[0].versions[].version' "config/${config_file}" >&2
+        exit 1
+    fi
+
+    # Convert ocp-X.Y format to X.Y and join with commas
+    echo "$ocp_versions_yaml" | sed 's/ocp-//' | tr '\n' ',' | sed 's/,$//'
