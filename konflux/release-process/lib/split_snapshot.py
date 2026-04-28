@@ -102,7 +102,7 @@ def split_snapshot(input_file, output_dir=None, ocp_filter=None):
         for component in components:
             component_name = component.get('name', '')
             # Check if component name contains any of the OCP patterns
-            # Pattern: {app}-fbc-ocm-{ocp_version}-stage-...
+            # Pattern: fbc-ocm-{ocp_version}-stage-{app}-...
             if any(f'-fbc-ocm-{pattern}-' in component_name for pattern in ocp_patterns):
                 filtered_components.append(component)
         components = filtered_components
