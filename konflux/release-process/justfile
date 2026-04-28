@@ -6,6 +6,79 @@ debug := "false"
 # Workspace directory for saving release files (can be overridden)
 workspace := "."
 
+# Show help for available recipes
+help:
+    @echo "ACM/MCE Release Process - Available Recipes"
+    @echo ""
+    @echo "MAIN WORKFLOWS:"
+    @echo "  release <target> <type> <app> <version> <snapshot> [--rc <N>] [--dry_run false]"
+    @echo "    Complete release workflow - generates YAML, saves to disk, applies to cluster"
+    @echo "    Targets: payload, bundle, catalog"
+    @echo "    Types: stage (requires --rc), prod"
+    @echo "    Apps: acm, mce"
+    @echo "    Example: just release payload stage acm 2.12.42 snapshot-xyz --rc 1"
+    @echo ""
+    @echo "  generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run false]"
+    @echo "    Update snapshot files and create PRs"
+    @echo "    Targets: bundle (updates operator bundle repo), catalog (updates catalog request)"
+    @echo "    Example: just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false"
+    @echo ""
+    @echo "QUERY & GENERATE:"
+    @echo "  query-bugs <app> <version> [bundle]"
+    @echo "    Query bugs from Jira (pass 'true' for bundle-bugs only)"
+    @echo ""
+    @echo "  query-cves <app> <version>"
+    @echo "    Query CVEs from Jira for specific version"
+    @echo ""
+    @echo "  generate-payload <type> <app> <version> <snapshot> [--rc <N>]"
+    @echo "  generate-bundle <type> <app> <version> <snapshot> [--rc <N>]"
+    @echo "  generate-catalog <app> <version> <snapshot> <rc> <ocp_versions>"
+    @echo "    Generate release YAMLs (output to stdout)"
+    @echo ""
+    @echo "APPLY TO CLUSTER:"
+    @echo "  apply-payload <type> <app> <version> <snapshot> [--rc <N>] [--dry_run false]"
+    @echo "  apply-bundle <type> <app> <version> <snapshot> [--rc <N>] [--dry_run false]"
+    @echo "  apply-catalog <app> <version> <rc> <ocp_versions> [--dry_run false]"
+    @echo ""
+    @echo "MONITORING (Beta / Work in Progress):"
+    @echo "  check-release <release-name>"
+    @echo "    Monitor release status with notifications"
+    @echo ""
+    @echo "  check-catalog-releases <app> <version> <rc> <ocp_versions>"
+    @echo "    Monitor multiple catalog releases with progress"
+    @echo ""
+    @echo "  check-commit <commit-sha> [app_name] [namespace]"
+    @echo "    Monitor Konflux commit pipeline runs"
+    @echo ""
+    @echo "  check-pr <pr-number> [repo] [workflow]"
+    @echo "    Monitor GitHub action and PR merge status"
+    @echo ""
+    @echo "UTILITIES:"
+    @echo "  retrieve-fbc-catalog-images <app> <version> <rc> <ocp_versions>"
+    @echo "  clone-release-mgmt <branch-name> [cert_file]"
+    @echo "  cleanup - Remove cloned repos"
+    @echo ""
+    @echo "COMPLETE WORKFLOW EXAMPLE:"
+    @echo "  # 1. Create payload release"
+    @echo "  just release payload stage acm 2.12.42 snapshot-xyz --rc 1"
+    @echo ""
+    @echo "  # 2. Update bundle snapshot (creates PR to operator bundle repo)"
+    @echo "  just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false"
+    @echo ""
+    @echo "  # 3. Create bundle release"
+    @echo "  just release bundle stage acm 2.12.42 snapshot-abc --rc 1"
+    @echo ""
+    @echo "  # 4. Update catalog request (creates PR to catalog repo)"
+    @echo "  just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false"
+    @echo ""
+    @echo "  # 5. Create catalog release (OCP versions auto-detected)"
+    @echo "  just release catalog stage acm 2.12.42 snapshot-def --rc 1"
+    @echo ""
+    @echo "VARIABLES:"
+    @echo "  debug=true        Enable debug output"
+    @echo "  workspace=<path>  Custom workspace directory (default: .)"
+    @echo ""
+
 # Query bugs from Jira for a specific application and version
 # bundle: "true" (bundle-bugs only), "false" (exclude bundle-bugs, default)
 query-bugs app version bundle="false":
@@ -274,8 +347,7 @@ retrieve-fbc-catalog-images app version rc ocp_versions: (_validate_app app) _ch
         # Convert version format: 4.12 -> 4-12
         ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
 
-        release_name="{{app}}-fbc-ocm-${ocp_file_ver}-stage-${short_version}-z${patch}-rc{{rc}}"
-
+        release_name="{{app}}-fbc-ocm-${ocp_file_ver}-stage-{{app}}-${short_version}-z${patch}-rc{{rc}}"
         [[ "{{debug}}" == "true" ]] && echo "📦 OCP $ocp_ver (${release_name})" >&2
         oc get release "$release_name" -n crt-redhat-acm-tenant -o yaml 2>/dev/null | \
             yq '.status.artifacts.components[] | .ocp_version + ": " + .index_image' || \
@@ -355,6 +427,102 @@ apply-catalog app version rc ocp_versions skip_confirm="false" dry_run="true": (
     done
 
     echo "✅ Applied ${#versions[@]} catalog(s)"
+
+# checking multiple catalog releases with progress notifications
+check-catalog-releases app version rc ocp_versions="":
+    #!/usr/bin/env bash
+
+    # Parse version
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
+
+    # Auto-detect OCP versions if not provided
+    ocp_versions_resolved="{{ocp_versions}}"
+    if [[ -z "{{ocp_versions}}" ]]; then
+        ocp_versions_resolved=$(just _get_ocp_versions {{app}} {{version}})
+    fi
+
+    # Parse OCP versions
+    versions=($(just _parse_ocp_versions "$ocp_versions_resolved"))
+
+    # Build release names
+    declare -A RELEASES
+    for ocp_ver in "${versions[@]}"; do
+        ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
+        release_name="{{app}}-fbc-ocm-${ocp_file_ver}-stage-{{app}}-${short_version}-z${patch}-rc{{rc}}"
+        RELEASES[$release_name]="pending"
+    done
+
+    TOTAL=${#RELEASES[@]}
+    COMPLETED=0
+    FIRST_RUN=true
+    PREV_LINES=0
+
+    echo "Monitoring ${TOTAL} catalog releases for {{app}} {{version}} rc{{rc}}"
+    echo ""
+
+    while true; do
+        if [[ "$FIRST_RUN" == "true" ]]; then
+            FIRST_RUN=false
+        else
+            # Move cursor up and clear previous output
+            for ((i=0; i<PREV_LINES; i++)); do
+                echo -ne "\033[1A\033[K"
+            done
+        fi
+
+        LINE_COUNT=0
+
+        for release_name in "${!RELEASES[@]}"; do
+            if [[ "${RELEASES[$release_name]}" == "notified" ]]; then
+                echo "  ✅ $release_name: Complete"; ((LINE_COUNT++))
+                continue
+            fi
+
+            YAML=$(oc get release "$release_name" -oyaml 2>/dev/null)
+            STATUS=$(echo "$YAML" | yq '.status.conditions[] | select(.type == "Released") | .status')
+            PROGRESSING=$(echo "$YAML" | yq '.status.conditions[] | select(.type == "Progressing") | .status')
+
+            if [[ "$STATUS" == "True" ]]; then
+                # Mark as notified and increment
+                RELEASES[$release_name]="notified"
+                ((COMPLETED++))
+
+                # Send notification
+                notify-send "Catalog Release Complete" "$release_name completed ($COMPLETED/$TOTAL)"
+                which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+
+                echo "  ✅ $release_name: Complete"; ((LINE_COUNT++))
+            elif [[ "$STATUS" == "False" && "$PROGRESSING" == "Failed" ]]; then
+                RELEASES[$release_name]="notified"
+                ((COMPLETED++))
+
+                notify-send "Catalog Release Failed" "$release_name failed ($COMPLETED/$TOTAL)"
+                which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+
+                echo "  ❌ $release_name: Failed"; ((LINE_COUNT++))
+            else
+                echo "  ⏳ $release_name: Released=$STATUS, Progressing=$PROGRESSING"; ((LINE_COUNT++))
+            fi
+        done
+
+        echo ""; ((LINE_COUNT++))
+        echo "$(date): Progress: $COMPLETED/$TOTAL complete"; ((LINE_COUNT++))
+
+        if [[ $COMPLETED -eq $TOTAL ]]; then
+            echo ""; ((LINE_COUNT++))
+            echo "All releases finished!"; ((LINE_COUNT++))
+            exit 0
+        fi
+
+        # Countdown to next check
+        echo ""; ((LINE_COUNT++))
+        PREV_LINES=$LINE_COUNT
+        for ((countdown=30; countdown>0; countdown--)); do
+            echo -ne "\033[1A\033[K"
+            echo "Next check in ${countdown}s..."
+            sleep 1
+        done
+    done
 
 # checking the release and playing a notify-send ping when complete
 check-release release:
@@ -801,6 +969,27 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
         # Apply to cluster
         echo "" >&2
         just _apply "$target_yaml" {{skip_confirm}} {{dry_run}}
+    fi
+
+# Generate snapshot updates: wrapper for bundle or catalog snapshot updates
+[arg("rc", long="rc")]
+[arg("skip_confirm", long="skip_confirm")]
+[arg("dry_run", long="dry_run")]
+generate-snapshot target type app version rc="" skip_confirm="false" dry_run="true":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Validate target
+    if [[ "{{target}}" != "bundle" && "{{target}}" != "catalog" ]]; then
+        echo "Error: target must be 'bundle' or 'catalog'" >&2
+        exit 1
+    fi
+
+    # Route to appropriate recipe
+    if [ "{{target}}" = "bundle" ]; then
+        just update-bundle-snapshot {{type}} {{app}} {{version}} --rc {{rc}} skip_confirm={{skip_confirm}} dry_run={{dry_run}}
+    else
+        just update-catalog-request {{type}} {{app}} {{version}} --rc {{rc}} skip_confirm={{skip_confirm}} dry_run={{dry_run}}
     fi
 
 # Update operator bundle repository with latest snapshot
