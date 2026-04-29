@@ -249,19 +249,27 @@ _check_gitlab_access:
 
     echo "🔐 Checking GitLab access..." >&2
 
-    # Test SSH authentication
-    if ! ssh -T git@$gitlab_host 2>&1 | grep -q "Welcome to GitLab"; then
-        # Try git ls-remote as fallback
-        if ! git ls-remote git@$gitlab_host:$upstream.git HEAD &>/dev/null; then
-            echo "❌ Cannot access GitLab at $gitlab_host" >&2
-            echo "   Please check:" >&2
-            echo "   - VPN connection to Red Hat network" >&2
-            echo "   - SSH key configured for $gitlab_host" >&2
-            exit 1
-        fi
+    # Try SSH first
+    if git ls-remote "git@${gitlab_host}:${upstream}.git" HEAD &>/dev/null; then
+        echo "✅ GitLab SSH access verified" >&2
+        export GITLAB_CLONE_METHOD="ssh"
+        return 0
     fi
 
-    echo "✅ GitLab access verified" >&2
+    # Fallback to HTTPS
+    if git ls-remote "https://${gitlab_host}/${upstream}.git" HEAD &>/dev/null; then
+        echo "✅ GitLab HTTPS access verified" >&2
+        export GITLAB_CLONE_METHOD="https"
+        return 0
+    fi
+
+    # Both failed
+    echo "❌ Cannot access GitLab at $gitlab_host" >&2
+    echo "   Please check:" >&2
+    echo "   - VPN connection to Red Hat network" >&2
+    echo "   - SSH key configured at https://$gitlab_host/-/profile/keys OR" >&2
+    echo "   - Git credentials configured (git config credential.helper)" >&2
+    exit 1
 
 # Private: check GitHub access via gh CLI
 _check_github_access:
@@ -308,7 +316,7 @@ _get_ocp_versions app version:
     mkdir -p "{{justfile_directory()}}/bundle-repos"
 
     if [ ! -d "$catalog_dir" ]; then
-        git clone "git@github.com:stolostron/acm-mce-operator-catalogs.git" "$catalog_dir" >&2
+        gh repo clone "stolostron/acm-mce-operator-catalogs" "$catalog_dir" >&2
     fi
 
     cd "$catalog_dir"

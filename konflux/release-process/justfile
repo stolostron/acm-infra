@@ -151,7 +151,7 @@ query-bugs app version bundle="false":
     echo "$jira_output" | jq -r 'map({id: .key, source: "issues.redhat.com"}) | sort_by(.id)' | yq -p=json
 
 # Query CVEs from Jira for a specific application and version
-query-cves app version:
+query-cves app version: _check_github_access
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -886,9 +886,13 @@ clone-release-mgmt branch_name: _check_gitlab_access
     upstream="acm/acm-release-management"
     gitlab_host="gitlab.cee.redhat.com"
 
-    # Clone if not exists
+    # Clone if not exists (use method determined by access check)
     if [ ! -d "$repo_dir" ]; then
-        git clone git@$gitlab_host:$upstream.git
+        if [ "${GITLAB_CLONE_METHOD:-ssh}" = "ssh" ]; then
+            git clone "git@${gitlab_host}:${upstream}.git"
+        else
+            git clone "https://${gitlab_host}/${upstream}.git"
+        fi
     fi
 
     cd "$repo_dir"
@@ -1236,7 +1240,7 @@ update-bundle-snapshot type app version rc="" skip_confirm="false" dry_run="true
 
     if [ ! -d "$bundle_dir" ]; then
         echo "  Cloning ${bundle_repo}..." >&2
-        git clone "git@github.com:stolostron/${bundle_repo}.git" "$bundle_dir"
+        gh repo clone "stolostron/${bundle_repo}" "$bundle_dir"
     fi
 
     cd "$bundle_dir"
@@ -1423,7 +1427,7 @@ update-catalog-request type app version rc="" skip_confirm="false" dry_run="true
 
     if [ ! -d "$catalog_dir" ]; then
         echo "  Cloning acm-mce-operator-catalogs..." >&2
-        git clone "git@github.com:stolostron/acm-mce-operator-catalogs.git" "$catalog_dir"
+        gh repo clone "stolostron/acm-mce-operator-catalogs" "$catalog_dir"
     fi
 
     cd "$catalog_dir"
