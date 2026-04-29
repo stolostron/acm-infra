@@ -288,14 +288,14 @@ _check_gitlab_access:
     if git ls-remote "git@${gitlab_host}:${upstream}.git" HEAD &>/dev/null; then
         echo "✅ GitLab SSH access verified" >&2
         export GITLAB_CLONE_METHOD="ssh"
-        return 0
+        exit 0
     fi
 
     # Fallback to HTTPS
     if git ls-remote "https://${gitlab_host}/${upstream}.git" HEAD &>/dev/null; then
         echo "✅ GitLab HTTPS access verified" >&2
         export GITLAB_CLONE_METHOD="https"
-        return 0
+        exit 0
     fi
 
     # Both failed
