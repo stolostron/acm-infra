@@ -113,7 +113,7 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
 
 # Query bugs from Jira for a specific application and version
 # bundle: "true" (bundle-bugs only), "false" (exclude bundle-bugs, default)
-query-bugs app version bundle="false":
+query-bugs app version bundle="false": _check_yq
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -914,7 +914,7 @@ clone-release-mgmt branch_name: _check_gitlab_access
 [arg("rc", long="rc")]
 [arg("dry_run", long="dry_run")]
 [arg("ocp_versions", long="ocp_versions")]
-stage-release target app version snapshot rc="" skip_confirm="false" dry_run="true" ocp_versions="": (_validate_app app) (_validate_rc rc) _check_oc_cluster
+stage-release target app version snapshot rc="" skip_confirm="false" dry_run="true" ocp_versions="": (_validate_app app) (_validate_rc rc) _check_yq _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -997,7 +997,7 @@ stage-release target app version snapshot rc="" skip_confirm="false" dry_run="tr
 [arg("rc", long="rc")]
 [arg("skip_confirm", long="skip_confirm")]
 [arg("dry_run", long="dry_run")]
-prod-release target app version rc="" skip_confirm="false" dry_run="true": (_validate_app app) (_validate_rc rc) _check_oc_cluster
+prod-release target app version rc="" skip_confirm="false" dry_run="true": (_validate_app app) (_validate_rc rc) _check_yq _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -1163,7 +1163,7 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true": (_val
 [arg("rc", long="rc")]
 [arg("skip_confirm", long="skip_confirm")]
 [arg("dry_run", long="dry_run")]
-generate-snapshot target type app version rc="" skip_confirm="false" dry_run="true":
+generate-snapshot target type app version rc="" skip_confirm="false" dry_run="true": _check_yq
     #!/usr/bin/env bash
     set -euo pipefail
 

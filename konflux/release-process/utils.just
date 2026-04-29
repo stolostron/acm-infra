@@ -162,6 +162,35 @@ _build_base app snapshot release_name release_plan release_type:
 
     [[ "{{debug}}" == "true" ]] && echo "[_build_base] Complete" >&2 || true
 
+# Private: check yq is mikefarah version
+_check_yq:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "🔐 Checking yq version..." >&2
+
+    # Check if yq is installed
+    if ! command -v yq &>/dev/null; then
+        echo "❌ yq command not found" >&2
+        echo "   Install mikefarah/yq: https://github.com/mikefarah/yq" >&2
+        exit 1
+    fi
+
+    # Check version output to ensure it's mikefarah's yq
+    yq_version=$(yq --version 2>&1 || true)
+
+    if ! echo "$yq_version" | grep -q "mikefarah/yq"; then
+        echo "❌ Wrong yq version detected" >&2
+        echo "   Found: $yq_version" >&2
+        echo "   Required: mikefarah/yq (Go implementation)" >&2
+        echo "   Install: https://github.com/mikefarah/yq" >&2
+        echo "" >&2
+        echo "   Note: python-yq and jq-wrapper versions are not supported" >&2
+        exit 1
+    fi
+
+    echo "✅ yq version verified: $yq_version" >&2
+
 # Private: check OpenShift cluster access
 _check_oc_cluster:
     #!/usr/bin/env bash
