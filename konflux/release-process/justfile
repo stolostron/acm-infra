@@ -65,7 +65,7 @@ help:
     @echo ""
     @echo "UTILITIES:"
     @echo "  retrieve-fbc-catalog-images <app> <version> <rc> <ocp_versions>"
-    @echo "  clone-release-mgmt <branch-name> [cert_file]"
+    @echo "  clone-release-mgmt <branch-name>"
     @echo "  cleanup - Remove cloned repos"
     @echo ""
     @echo "COMPLETE WORKFLOW EXAMPLE:"
@@ -93,9 +93,8 @@ help:
 [arg("rc", long="rc")]
 [arg("skip_confirm", long="skip_confirm")]
 [arg("dry_run", long="dry_run")]
-[arg("cert_file", long="cert_file")]
 [arg("ocp_versions", long="ocp_versions")]
-release target type app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="" ocp_versions="": (_validate_app app)
+release target type app version snapshot rc="" skip_confirm="false" dry_run="true" ocp_versions="": (_validate_app app)
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -107,9 +106,9 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
 
     # Delegate to appropriate recipe
     if [ "{{type}}" = "stage" ]; then
-        just stage-release {{target}} {{app}} {{version}} {{snapshot}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}} --cert_file "{{cert_file}}" --ocp_versions "{{ocp_versions}}"
+        just stage-release {{target}} {{app}} {{version}} {{snapshot}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}} --ocp_versions "{{ocp_versions}}"
     else
-        just prod-release {{target}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}} --cert_file "{{cert_file}}"
+        just prod-release {{target}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
     fi
 
 # Query bugs from Jira for a specific application and version
@@ -879,18 +878,13 @@ cleanup:
     done
 
 # Clone release management repo and create a branch
-clone-release-mgmt branch_name cert_file="": _check_gitlab_access
+clone-release-mgmt branch_name: _check_gitlab_access
     #!/usr/bin/env bash
     set -euo pipefail
 
     repo_dir="acm-release-management"
     upstream="acm/acm-release-management"
     gitlab_host="gitlab.cee.redhat.com"
-
-    # Set SSL cert file if provided
-    if [ -n "{{cert_file}}" ]; then
-        export SSL_CERT_FILE="{{cert_file}}"
-    fi
 
     # Clone if not exists
     if [ ! -d "$repo_dir" ]; then
@@ -913,11 +907,10 @@ clone-release-mgmt branch_name cert_file="": _check_gitlab_access
 
 # Stage release: generate YAML, save to disk, and apply to cluster
 [arg("skip_confirm", long="skip_confirm")]
-[arg("cert_file", long="cert_file")]
 [arg("rc", long="rc")]
 [arg("dry_run", long="dry_run")]
 [arg("ocp_versions", long="ocp_versions")]
-stage-release target app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="" ocp_versions="": (_validate_app app) (_validate_rc rc) _check_oc_cluster
+stage-release target app version snapshot rc="" skip_confirm="false" dry_run="true" ocp_versions="": (_validate_app app) (_validate_rc rc) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -943,7 +936,7 @@ stage-release target app version snapshot rc="" skip_confirm="false" dry_run="tr
     if [ "$workspace_dir" = "." ]; then
         # Clone release management repo and create branch
         branch_name="stage-release-{{app}}-${short_version}-z${patch}-rc{{rc}}"
-        just clone-release-mgmt "$branch_name" "{{cert_file}}"
+        just clone-release-mgmt "$branch_name"
         workspace_dir="acm-release-management"
     fi
 
@@ -1000,8 +993,7 @@ stage-release target app version snapshot rc="" skip_confirm="false" dry_run="tr
 [arg("rc", long="rc")]
 [arg("skip_confirm", long="skip_confirm")]
 [arg("dry_run", long="dry_run")]
-[arg("cert_file", long="cert_file")]
-prod-release target app version rc="" skip_confirm="false" dry_run="true" cert_file="": (_validate_app app) (_validate_rc rc) _check_oc_cluster
+prod-release target app version rc="" skip_confirm="false" dry_run="true": (_validate_app app) (_validate_rc rc) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -1018,7 +1010,7 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true" cert_f
     workspace_dir="{{workspace}}"
     if [ "$workspace_dir" = "." ]; then
         branch_name="prod-release-{{app}}-${short_version}-z${patch}"
-        just clone-release-mgmt "$branch_name" "{{cert_file}}"
+        just clone-release-mgmt "$branch_name"
         workspace_dir="acm-release-management"
     fi
 
