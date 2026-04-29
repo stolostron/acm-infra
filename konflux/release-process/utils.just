@@ -7,6 +7,15 @@ _validate_app app:
         exit 1
     fi
 
+# Private: validate rc parameter is provided
+_validate_rc rc:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{rc}}" ]; then
+        echo "Error: --rc parameter is required" >&2
+        exit 1
+    fi
+
 # Private: validate common inputs
 _validate type app rc: (_validate_app app)
     #!/usr/bin/env bash
@@ -15,9 +24,8 @@ _validate type app rc: (_validate_app app)
         echo "Error: type must be 'stage' or 'prod'" >&2
         exit 1
     fi
-    if [[ "{{type}}" == "stage" && -z "{{rc}}" ]]; then
-        echo "Error: rc parameter is required for stage releases" >&2
-        exit 1
+    if [[ "{{type}}" == "stage" ]]; then
+        just _validate_rc {{rc}}
     fi
 
 # Private: parse version into major.minor.patch.short_version (space-separated)

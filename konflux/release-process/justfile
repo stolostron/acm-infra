@@ -18,6 +18,11 @@ help:
     @echo "    Apps: acm, mce"
     @echo "    Example: just release payload stage acm 2.12.42 snapshot-xyz --rc 1"
     @echo ""
+    @echo "  prod-release <target> <app> <version> --rc <N> [--dry_run false]"
+    @echo "    Promote stage to prod - copies stage file(s), updates for prod, applies to cluster"
+    @echo "    Targets: payload, bundle, catalog"
+    @echo "    Example: just prod-release payload acm 2.12.42 --rc 1"
+    @echo ""
     @echo "  generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run false]"
     @echo "    Update snapshot files and create PRs"
     @echo "    Targets: bundle (updates operator bundle repo), catalog (updates catalog request)"
@@ -973,6 +978,173 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
         just _apply "$target_yaml" {{skip_confirm}} {{dry_run}}
     fi
 
+# Promote stage to prod: copy stage file, update for prod, and apply to cluster
+[arg("rc", long="rc")]
+[arg("skip_confirm", long="skip_confirm")]
+[arg("dry_run", long="dry_run")]
+[arg("cert_file", long="cert_file")]
+prod-release target app version rc="" skip_confirm="false" dry_run="true" cert_file="": (_validate_app app) (_validate_rc rc) _check_oc_cluster
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Validate target
+    if [[ "{{target}}" != "payload" && "{{target}}" != "bundle" && "{{target}}" != "catalog" ]]; then
+        echo "Error: target must be 'payload', 'bundle', or 'catalog'" >&2
+        exit 1
+    fi
+
+    # Parse version
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
+
+    # Find or clone acm-release-management
+    workspace_dir="{{workspace}}"
+    if [ "$workspace_dir" = "." ]; then
+        branch_name="prod-release-{{app}}-${short_version}-z${patch}"
+        just clone-release-mgmt "$branch_name" "{{cert_file}}"
+        workspace_dir="acm-release-management"
+    fi
+
+    # Build paths
+    app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
+    base_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
+
+    if [ "{{target}}" = "catalog" ]; then
+        # Catalog: promote multiple files
+        stage_catalogs_dir="${base_dir}/rc{{rc}}/catalogs"
+        prod_catalogs_dir="${base_dir}/catalogs"
+
+        # Check stage catalog directories exist
+        if [ ! -d "$stage_catalogs_dir/snapshots" ] || [ ! -d "$stage_catalogs_dir/releases" ]; then
+            echo "❌ Stage catalog directories not found: $stage_catalogs_dir" >&2
+            echo "   Run 'just release catalog stage {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
+            exit 1
+        fi
+
+        # Create prod directories
+        mkdir -p "$prod_catalogs_dir/snapshots"
+        mkdir -p "$prod_catalogs_dir/releases"
+
+        echo "📦 Promoting stage catalogs to prod..." >&2
+
+        # Process snapshots
+        snapshot_count=0
+        for stage_file in "$stage_catalogs_dir/snapshots"/snapshot-*.yaml; do
+            [ -f "$stage_file" ] || continue
+            filename=$(basename "$stage_file")
+            # Remove RC suffix and replace stage with prod
+            prod_filename=$(echo "$filename" | sed "s/-rc{{rc}}//" | sed "s/stage/prod/")
+            prod_file="$prod_catalogs_dir/snapshots/$prod_filename"
+
+            # Transform YAML (replace stage with prod and remove RC suffix from metadata.name)
+            yq eval '.metadata.name |= sub("stage", "prod") | .metadata.name |= sub("-rc{{rc}}", "") | .spec.application |= sub("stage", "prod")' \
+                "$stage_file" > "$prod_file"
+
+            echo "  ✓ Snapshot: $prod_filename" >&2
+            snapshot_count=$((snapshot_count + 1))
+        done
+
+        # Process releases
+        release_count=0
+        for stage_file in "$stage_catalogs_dir/releases"/*.yaml; do
+            [ -f "$stage_file" ] || continue
+            filename=$(basename "$stage_file")
+            # Remove RC suffix and replace stage with prod
+            prod_filename=$(echo "$filename" | sed "s/-rc{{rc}}//" | sed "s/stage/prod/")
+            prod_file="$prod_catalogs_dir/releases/$prod_filename"
+
+            # Transform YAML (replace stage with prod and remove RC suffix from metadata.name and spec.snapshot)
+            yq eval '.metadata.name |= sub("stage", "prod") | .metadata.name |= sub("-rc{{rc}}", "") | .spec.snapshot |= sub("stage", "prod") | .spec.snapshot |= sub("-rc{{rc}}", "") | .spec.releasePlan |= sub("stage", "prod")' \
+                "$stage_file" > "$prod_file"
+
+            echo "  ✓ Release: $prod_filename" >&2
+            release_count=$((release_count + 1))
+        done
+
+        echo "" >&2
+        echo "✅ Created $snapshot_count snapshot(s) and $release_count release(s)" >&2
+        echo "" >&2
+
+        # Apply catalog files
+        release_files=("$prod_catalogs_dir/releases"/*.yaml)
+        file_count=${#release_files[@]}
+
+        echo "📦 Applying $file_count catalog releases to cluster..." >&2
+
+        # Show all files
+        for release_file in "${release_files[@]}"; do
+            filename=$(basename "$release_file")
+            snapshot_filename=$(echo "$filename" | sed 's/^/snapshot-/')
+            snapshot_file="$prod_catalogs_dir/snapshots/$snapshot_filename"
+
+            echo ""
+            echo "  → Snapshot: $(basename "$snapshot_file")"
+            echo "---"
+            cat "$snapshot_file"
+            echo "---"
+            echo ""
+            echo "  → Release: $(basename "$release_file")"
+            echo "---"
+            cat "$release_file"
+            echo "---"
+            echo ""
+        done
+
+        # Single confirmation for all files
+        if [ "{{skip_confirm}}" != "true" ]; then
+            if [ "{{dry_run}}" = "true" ]; then
+                echo "Press Enter to apply $file_count catalogs (DRY-RUN), or Ctrl+C to cancel..." >&2
+            else
+                echo "Press Enter to apply $file_count catalogs (LIVE), or Ctrl+C to cancel..." >&2
+            fi
+            read -r
+        fi
+
+        # Apply all files
+        echo "Applying..." >&2
+        for release_file in "${release_files[@]}"; do
+            filename=$(basename "$release_file")
+            snapshot_filename=$(echo "$filename" | sed 's/^/snapshot-/')
+            snapshot_file="$prod_catalogs_dir/snapshots/$snapshot_filename"
+
+            if [ "{{dry_run}}" = "true" ]; then
+                oc apply --dry-run=server -f "$snapshot_file"
+                oc apply --dry-run=server -f "$release_file"
+            else
+                oc apply -f "$snapshot_file"
+                oc apply -f "$release_file"
+            fi
+        done
+
+        echo "✅ Applied $file_count catalog(s)" >&2
+
+    else
+        # Payload/Bundle: promote single file
+        stage_file="${base_dir}/rc{{rc}}/{{app}}-${short_version}-{{target}}-stage-z${patch}-rc{{rc}}.yaml"
+        prod_file="${base_dir}/{{app}}-${short_version}-{{target}}-prod-z${patch}.yaml"
+
+        # Check stage file exists
+        if [ ! -f "$stage_file" ]; then
+            echo "❌ Stage {{target}} file not found: $stage_file" >&2
+            echo "   Run 'just release {{target}} stage {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
+            exit 1
+        fi
+
+        echo "📦 Promoting stage {{target}} to prod..." >&2
+        echo "  Source: $(basename "$stage_file")" >&2
+        echo "  Dest: $(basename "$prod_file")" >&2
+
+        # Copy file and update for prod
+        yq eval '.metadata.name |= sub("stage", "prod") | .spec.releasePlan |= sub("stage", "prod")' \
+            "$stage_file" > "$prod_file"
+
+        echo "  ✓ Saved: $prod_file" >&2
+        echo "" >&2
+
+        # Read and apply to cluster
+        prod_yaml=$(cat "$prod_file")
+        just _apply "$prod_yaml" {{skip_confirm}} {{dry_run}}
+    fi
+
 # Generate snapshot updates: wrapper for bundle or catalog snapshot updates
 [arg("rc", long="rc")]
 [arg("skip_confirm", long="skip_confirm")]
@@ -989,9 +1161,9 @@ generate-snapshot target type app version rc="" skip_confirm="false" dry_run="tr
 
     # Route to appropriate recipe
     if [ "{{target}}" = "bundle" ]; then
-        just update-bundle-snapshot {{type}} {{app}} {{version}} --rc {{rc}} skip_confirm={{skip_confirm}} dry_run={{dry_run}}
+        just update-bundle-snapshot {{type}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
     else
-        just update-catalog-request {{type}} {{app}} {{version}} --rc {{rc}} skip_confirm={{skip_confirm}} dry_run={{dry_run}}
+        just update-catalog-request {{type}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
     fi
 
 # Update operator bundle repository with latest snapshot
