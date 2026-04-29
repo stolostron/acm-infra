@@ -51,12 +51,18 @@ _get_author:
     echo "$author"
 
 # Private: build catalog directory paths (returns: release_dir snapshots_dir releases_dir)
-_catalog_dirs app version rc:
+_catalog_dirs type app version rc:
     #!/usr/bin/env bash
     set -euo pipefail
     base_dir="{{justfile_directory()}}/acm-release-management"
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
-    release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
+
+    if [ "{{type}}" = "stage" ]; then
+        release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
+    else
+        release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/catalogs"
+    fi
+
     snapshots_dir="${release_dir}/snapshots"
     releases_dir="${release_dir}/releases"
     echo "$release_dir $snapshots_dir $releases_dir"

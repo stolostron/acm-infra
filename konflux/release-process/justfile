@@ -386,8 +386,8 @@ retrieve-fbc-catalog-images app version rc ocp_versions: (_validate_app app) _ch
             { [[ "{{debug}}" == "true" ]] && echo "❌ Release not found or not ready: ${release_name}" >&2; }
     done
 
-# Apply a list of catalog snapshots and releases
-apply-catalog app version rc ocp_versions skip_confirm="false" dry_run="true": (_validate_app app) _check_oc_cluster
+# Apply catalog snapshots and releases from directories
+apply-catalog type app version rc ocp_versions skip_confirm="false" dry_run="true": (_validate_app app) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -395,70 +395,66 @@ apply-catalog app version rc ocp_versions skip_confirm="false" dry_run="true": (
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # Build directory paths
-    read -r release_dir snapshots_dir releases_dir <<< $(just _catalog_dirs {{app}} {{version}} {{rc}})
+    read -r release_dir snapshots_dir releases_dir <<< $(just _catalog_dirs {{type}} {{app}} {{version}} {{rc}})
 
-    # Parse OCP versions
-    versions=($(just _parse_ocp_versions {{ocp_versions}}))
+    # Check directories exist
+    if [ ! -d "$snapshots_dir" ] || [ ! -d "$releases_dir" ]; then
+        echo "❌ Catalog directories not found" >&2
+        echo "   Run 'just generate-catalog {{app}} {{version}} <snapshot> {{rc}} {{ocp_versions}}' first" >&2
+        exit 1
+    fi
 
-    # Apply snapshots and releases for each version
-    for ocp_ver in "${versions[@]}"; do
-        # Convert version format: 4.12 -> 4-12
-        ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
+    # Count files
+    snapshot_count=$(find "$snapshots_dir" -name "*.yaml" -type f | wc -l)
+    release_count=$(find "$releases_dir" -name "*.yaml" -type f | wc -l)
 
-        # Build full component name with version suffix
-        base_component="fbc-ocm-${ocp_file_ver}-stage"
-        version_suffix="{{app}}-${short_version}-z${patch}-rc{{rc}}"
-        component_name="${base_component}-${version_suffix}"
+    echo "📦 Applying catalog files..."
+    echo "   Snapshots: $snapshot_count files"
+    echo "   Releases: $release_count files"
+    echo ""
 
-        snapshot_file="${snapshots_dir}/snapshot-${component_name}.yaml"
-        release_file="${releases_dir}/${component_name}.yaml"
-
-        # Check files exist
-        if [[ ! -f "$snapshot_file" ]]; then
-            echo "❌ Snapshot not found: $snapshot_file" >&2
-            exit 1
-        fi
-        if [[ ! -f "$release_file" ]]; then
-            echo "❌ Release not found: $release_file" >&2
-            exit 1
-        fi
-
-        echo "📦 OCP $ocp_ver"
-        echo ""
-        echo "  → Snapshot: $(basename "$snapshot_file")"
-        echo "---"
-        cat "$snapshot_file"
-        echo "---"
-        echo ""
-        echo "  → Release: $(basename "$release_file")"
-        echo "---"
-        cat "$release_file"
-        echo "---"
-        echo ""
-
-        # Confirm before applying
-        if [ "{{skip_confirm}}" != "true" ]; then
-            if [ "{{dry_run}}" = "true" ]; then
-                echo "Press Enter to continue (DRY-RUN), or Ctrl+C to cancel..." >&2
-            else
-                echo "Press Enter to continue (LIVE), or Ctrl+C to cancel..." >&2
-            fi
-            read -r
-        fi
-
-        # Apply both files
-        echo "Applying..."
-        if [ "{{dry_run}}" = "true" ]; then
-            oc apply --dry-run=server -f "$snapshot_file"
-            oc apply --dry-run=server -f "$release_file"
-        else
-            oc apply -f "$snapshot_file"
-            oc apply -f "$release_file"
-        fi
-        echo ""
+    # Show all files that will be applied
+    echo "Files to apply:"
+    echo ""
+    for file in "$snapshots_dir"/*.yaml; do
+        [ -f "$file" ] || continue
+        echo "  📄 $(basename "$file")"
     done
+    echo ""
+    for file in "$releases_dir"/*.yaml; do
+        [ -f "$file" ] || continue
+        echo "  📄 $(basename "$file")"
+    done
+    echo ""
 
-    echo "✅ Applied ${#versions[@]} catalog(s)"
+    # Confirm before applying
+    if [ "{{skip_confirm}}" != "true" ]; then
+        if [ "{{dry_run}}" = "true" ]; then
+            echo "Press Enter to apply (DRY-RUN), or Ctrl+C to cancel..." >&2
+        else
+            echo "Press Enter to apply (LIVE), or Ctrl+C to cancel..." >&2
+        fi
+        read -r
+    fi
+
+    # Apply all snapshots, then all releases
+    echo "Applying snapshots..."
+    if [ "{{dry_run}}" = "true" ]; then
+        oc apply --dry-run=server -f "$snapshots_dir"
+    else
+        oc apply -f "$snapshots_dir"
+    fi
+
+    echo ""
+    echo "Applying releases..."
+    if [ "{{dry_run}}" = "true" ]; then
+        oc apply --dry-run=server -f "$releases_dir"
+    else
+        oc apply -f "$releases_dir"
+    fi
+
+    echo ""
+    echo "✅ Applied $snapshot_count snapshot(s) and $release_count release(s)"
 
 # checking multiple catalog releases with progress notifications
 check-catalog-releases app version rc ocp_versions="":
@@ -769,7 +765,7 @@ generate-catalog app version snapshot rc ocp_versions: (_validate_app app) _chec
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
     # Build directory paths
-    read -r release_dir snapshots_dir releases_dir <<< $(just _catalog_dirs {{app}} {{version}} {{rc}})
+    read -r release_dir snapshots_dir releases_dir <<< $(just _catalog_dirs stage {{app}} {{version}} {{rc}})
 
     echo "📁 Setting up catalog directories..."
     echo "   Base: ${release_dir}"
@@ -960,7 +956,7 @@ stage-release target app version snapshot rc="" skip_confirm="false" dry_run="tr
         echo "" >&2
 
         # Apply catalogs (confirmation happens inside apply-catalog)
-        just debug={{debug}} apply-catalog {{app}} {{version}} {{rc}} "${ocp_versions_resolved}" {{skip_confirm}} {{dry_run}}
+        just debug={{debug}} apply-catalog stage {{app}} {{version}} {{rc}} "${ocp_versions_resolved}" {{skip_confirm}} {{dry_run}}
     else
         # Payload/Bundle workflow: single YAML generation and apply
         # Create directory if it doesn't exist
@@ -1024,30 +1020,30 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true": (_val
 
     if [ "{{target}}" = "catalog" ]; then
         # Catalog: promote multiple files
-        stage_catalogs_dir="${base_dir}/rc{{rc}}/catalogs"
-        prod_catalogs_dir="${base_dir}/catalogs"
+        read -r stage_catalogs_dir stage_snapshots_dir stage_releases_dir <<< $(just _catalog_dirs stage {{app}} {{version}} {{rc}})
+        read -r prod_catalogs_dir prod_snapshots_dir prod_releases_dir <<< $(just _catalog_dirs prod {{app}} {{version}} {{rc}})
 
         # Check stage catalog directories exist
-        if [ ! -d "$stage_catalogs_dir/snapshots" ] || [ ! -d "$stage_catalogs_dir/releases" ]; then
+        if [ ! -d "$stage_snapshots_dir" ] || [ ! -d "$stage_releases_dir" ]; then
             echo "❌ Stage catalog directories not found: $stage_catalogs_dir" >&2
             echo "   Run 'just release catalog stage {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
             exit 1
         fi
 
         # Create prod directories
-        mkdir -p "$prod_catalogs_dir/snapshots"
-        mkdir -p "$prod_catalogs_dir/releases"
+        mkdir -p "$prod_snapshots_dir"
+        mkdir -p "$prod_releases_dir"
 
         echo "📦 Promoting stage catalogs to prod..." >&2
 
         # Process snapshots
         snapshot_count=0
-        for stage_file in "$stage_catalogs_dir/snapshots"/snapshot-*.yaml; do
+        for stage_file in "$stage_snapshots_dir"/snapshot-*.yaml; do
             [ -f "$stage_file" ] || continue
             filename=$(basename "$stage_file")
             # Remove RC suffix and replace stage with prod
             prod_filename=$(echo "$filename" | sed "s/-rc{{rc}}//" | sed "s/stage/prod/")
-            prod_file="$prod_catalogs_dir/snapshots/$prod_filename"
+            prod_file="$prod_snapshots_dir/$prod_filename"
 
             # Transform YAML (replace stage with prod and remove RC suffix from metadata.name)
             yq eval '.metadata.name |= sub("stage", "prod") | .metadata.name |= sub("-rc{{rc}}", "") | .spec.application |= sub("stage", "prod")' \
@@ -1059,12 +1055,12 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true": (_val
 
         # Process releases
         release_count=0
-        for stage_file in "$stage_catalogs_dir/releases"/*.yaml; do
+        for stage_file in "$stage_releases_dir"/*.yaml; do
             [ -f "$stage_file" ] || continue
             filename=$(basename "$stage_file")
             # Remove RC suffix and replace stage with prod
             prod_filename=$(echo "$filename" | sed "s/-rc{{rc}}//" | sed "s/stage/prod/")
-            prod_file="$prod_catalogs_dir/releases/$prod_filename"
+            prod_file="$prod_releases_dir/$prod_filename"
 
             # Transform YAML (replace stage with prod and remove RC suffix from metadata.name and spec.snapshot)
             yq eval '.metadata.name |= sub("stage", "prod") | .metadata.name |= sub("-rc{{rc}}", "") | .spec.snapshot |= sub("stage", "prod") | .spec.snapshot |= sub("-rc{{rc}}", "") | .spec.releasePlan |= sub("stage", "prod")' \
@@ -1079,57 +1075,7 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true": (_val
         echo "" >&2
 
         # Apply catalog files
-        release_files=("$prod_catalogs_dir/releases"/*.yaml)
-        file_count=${#release_files[@]}
-
-        echo "📦 Applying $file_count catalog releases to cluster..." >&2
-
-        # Show all files
-        for release_file in "${release_files[@]}"; do
-            filename=$(basename "$release_file")
-            snapshot_filename=$(echo "$filename" | sed 's/^/snapshot-/')
-            snapshot_file="$prod_catalogs_dir/snapshots/$snapshot_filename"
-
-            echo ""
-            echo "  → Snapshot: $(basename "$snapshot_file")"
-            echo "---"
-            cat "$snapshot_file"
-            echo "---"
-            echo ""
-            echo "  → Release: $(basename "$release_file")"
-            echo "---"
-            cat "$release_file"
-            echo "---"
-            echo ""
-        done
-
-        # Single confirmation for all files
-        if [ "{{skip_confirm}}" != "true" ]; then
-            if [ "{{dry_run}}" = "true" ]; then
-                echo "Press Enter to apply $file_count catalogs (DRY-RUN), or Ctrl+C to cancel..." >&2
-            else
-                echo "Press Enter to apply $file_count catalogs (LIVE), or Ctrl+C to cancel..." >&2
-            fi
-            read -r
-        fi
-
-        # Apply all files
-        echo "Applying..." >&2
-        for release_file in "${release_files[@]}"; do
-            filename=$(basename "$release_file")
-            snapshot_filename=$(echo "$filename" | sed 's/^/snapshot-/')
-            snapshot_file="$prod_catalogs_dir/snapshots/$snapshot_filename"
-
-            if [ "{{dry_run}}" = "true" ]; then
-                oc apply --dry-run=server -f "$snapshot_file"
-                oc apply --dry-run=server -f "$release_file"
-            else
-                oc apply -f "$snapshot_file"
-                oc apply -f "$release_file"
-            fi
-        done
-
-        echo "✅ Applied $file_count catalog(s)" >&2
+        just debug={{debug}} apply-catalog prod {{app}} {{version}} {{rc}} "" {{skip_confirm}} {{dry_run}}
 
     else
         # Payload/Bundle: promote single file
