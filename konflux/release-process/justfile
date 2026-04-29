@@ -12,11 +12,16 @@ help:
     @echo ""
     @echo "MAIN WORKFLOWS:"
     @echo "  release <target> <type> <app> <version> <snapshot> [--rc <N>] [--dry_run false]"
-    @echo "    Complete release workflow - generates YAML, saves to disk, applies to cluster"
+    @echo "    Unified release workflow - delegates to stage-release or prod-release"
     @echo "    Targets: payload, bundle, catalog"
-    @echo "    Types: stage (requires --rc), prod"
+    @echo "    Types: stage (requires --rc), prod (requires --rc)"
     @echo "    Apps: acm, mce"
     @echo "    Example: just release payload stage acm 2.12.42 snapshot-xyz --rc 1"
+    @echo ""
+    @echo "  stage-release <target> <app> <version> <snapshot> --rc <N> [--dry_run false]"
+    @echo "    Stage release workflow - generates YAML, saves to disk, applies to cluster"
+    @echo "    Targets: payload, bundle, catalog"
+    @echo "    Example: just stage-release payload acm 2.12.42 snapshot-xyz --rc 1"
     @echo ""
     @echo "  prod-release <target> <app> <version> --rc <N> [--dry_run false]"
     @echo "    Promote stage to prod - copies stage file(s), updates for prod, applies to cluster"
@@ -83,6 +88,29 @@ help:
     @echo "  debug=true        Enable debug output"
     @echo "  workspace=<path>  Custom workspace directory (default: .)"
     @echo ""
+
+# Unified release wrapper: delegates to stage-release or prod-release based on type
+[arg("rc", long="rc")]
+[arg("skip_confirm", long="skip_confirm")]
+[arg("dry_run", long="dry_run")]
+[arg("cert_file", long="cert_file")]
+[arg("ocp_versions", long="ocp_versions")]
+release target type app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="" ocp_versions="": (_validate_app app)
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Validate type
+    if [[ "{{type}}" != "stage" && "{{type}}" != "prod" ]]; then
+        echo "Error: type must be 'stage' or 'prod'" >&2
+        exit 1
+    fi
+
+    # Delegate to appropriate recipe
+    if [ "{{type}}" = "stage" ]; then
+        just stage-release {{target}} {{app}} {{version}} {{snapshot}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}} --cert_file "{{cert_file}}" --ocp_versions "{{ocp_versions}}"
+    else
+        just prod-release {{target}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}} --cert_file "{{cert_file}}"
+    fi
 
 # Query bugs from Jira for a specific application and version
 # bundle: "true" (bundle-bugs only), "false" (exclude bundle-bugs, default)
@@ -883,13 +911,13 @@ clone-release-mgmt branch_name cert_file="": _check_gitlab_access
         echo "✅ Branch {{branch_name}} created from origin/main"
     fi
 
-# Release: generate YAML, save to disk, and apply to cluster
+# Stage release: generate YAML, save to disk, and apply to cluster
 [arg("skip_confirm", long="skip_confirm")]
 [arg("cert_file", long="cert_file")]
 [arg("rc", long="rc")]
 [arg("dry_run", long="dry_run")]
 [arg("ocp_versions", long="ocp_versions")]
-release target type app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="" ocp_versions="": (_validate type app rc) _check_oc_cluster
+stage-release target app version snapshot rc="" skip_confirm="false" dry_run="true" cert_file="" ocp_versions="": (_validate_app app) (_validate_rc rc) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -914,25 +942,15 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
     workspace_dir="{{workspace}}"
     if [ "$workspace_dir" = "." ]; then
         # Clone release management repo and create branch
-        branch_name="{{type}}-release-{{app}}-${short_version}-z${patch}"
-        if [ "{{type}}" = "stage" ]; then
-            branch_name="${branch_name}-rc{{rc}}"
-        fi
-
+        branch_name="stage-release-{{app}}-${short_version}-z${patch}-rc{{rc}}"
         just clone-release-mgmt "$branch_name" "{{cert_file}}"
         workspace_dir="acm-release-management"
     fi
 
-    # Build directory path
+    # Build directory path (stage always goes in rc subdirectory)
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
-    release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
-
-    if [ "{{type}}" = "stage" ]; then
-        release_dir="${release_dir}/rc{{rc}}"
-        suffix="stage-z${patch}-rc{{rc}}"
-    else
-        suffix="prod-z${patch}"
-    fi
+    release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}/rc{{rc}}"
+    suffix="stage-z${patch}-rc{{rc}}"
 
     # Branch based on target type
     if [ "{{target}}" = "catalog" ]; then
@@ -961,9 +979,9 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
         }
         echo "  ✓ Saved: $(basename "$snapshot_file")" >&2
 
-        # Generate the YAML
+        # Generate the YAML (hardcoded to stage)
         echo "  Generating {{target}}..." >&2
-        target_yaml=$(just debug={{debug}} generate-{{target}} {{type}} {{app}} {{version}} {{snapshot}} {{rc}})
+        target_yaml=$(just debug={{debug}} generate-{{target}} stage {{app}} {{version}} {{snapshot}} {{rc}})
 
         # Save to disk
         target_file="${release_dir}/{{app}}-${short_version}-{{target}}-${suffix}.yaml"
