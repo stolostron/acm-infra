@@ -480,18 +480,37 @@ check_promoted() {
     if [[ "$promoted" == "null" || -z "$promoted" ]]; then
         # failed to get image
         # echo "failed to get image"
-        buildtime="IMAGE_PULL_FAILURE,Failed"
+        buildtime="IMAGE_PULL_FAILURE,Failed,"
     elif [[ "$promoted" =~ sha256:[a-f0-9]{64}$ ]]; then
         # found image
         if ! skopeo=$(skopeo $skopeo_mac_args inspect "docker://$promoted" 2>/dev/null); then
             # inspection failed
-            buildtime="INSPECTION_FAILURE,Failed"
+            buildtime="INSPECTION_FAILURE,Failed,"
         else
-            buildtime="$(echo "$skopeo" | yq -p=json ".Labels.build-date" | sed 's/Z$//'),Successful"
+            # Extract build date
+            build_date="$(echo "$skopeo" | yq -p=json ".Labels.\"build-date\"" | sed 's/Z$//')"
+
+            # Extract git commit SHA from image labels
+            # Try common label names used by Konflux/OpenShift builds
+            commit_sha=$(echo "$skopeo" | yq -p=json ".Labels.\"io.openshift.build.commit.id\"" 2>/dev/null)
+            if [[ -z "$commit_sha" || "$commit_sha" == "null" ]]; then
+                commit_sha=$(echo "$skopeo" | yq -p=json ".Labels.\"vcs-ref\"" 2>/dev/null)
+            fi
+            if [[ -z "$commit_sha" || "$commit_sha" == "null" ]]; then
+                commit_sha=$(echo "$skopeo" | yq -p=json ".Labels.\"org.opencontainers.image.revision\"" 2>/dev/null)
+            fi
+
+            # Clean up commit SHA (remove quotes, handle null)
+            commit_sha=$(echo "$commit_sha" | tr -d '"')
+            if [[ "$commit_sha" == "null" ]]; then
+                commit_sha=""
+            fi
+
+            buildtime="$build_date,Successful,$commit_sha"
         fi
     else
         # invalid or incomplete digest
-        buildtime="DIGEST_FAILURE,Failed"
+        buildtime="DIGEST_FAILURE,Failed,"
     fi
 
     echo "$buildtime"
@@ -929,10 +948,16 @@ for line in $components; do
         sleep $COMPONENT_DELAY
     fi
 
-    data=$(check_promoted "$line" "$skopeo_mac_args")
+    promotion_data=$(check_promoted "$line" "$skopeo_mac_args")
 
-    # Extract build time from data (format: "buildtime,status")
-    build_time="${data%%,*}"
+    # Extract build time, promotion status, and commit SHA from data (format: "buildtime,status,commit_sha")
+    build_time="${promotion_data%%,*}"
+    rest="${promotion_data#*,}"
+    promotion_status="${rest%%,*}"
+    promoted_commit_sha="${rest#*,}"
+
+    # Rebuild data without commit_sha to maintain CSV format (buildtime,status)
+    data="$build_time,$promotion_status"
 
     url=$(echo "$component_yaml" | yq ".items[] | select(.metadata.name == \"$line\") | .spec.source.git.url")
     branch=$(echo "$component_yaml" | yq ".items[] | select(.metadata.name == \"$line\") | .spec.source.git.revision")
@@ -988,13 +1013,22 @@ for line in $components; do
         data="$data,$(check_hermetic_builds "$yaml" "$pull_yaml" "$authorization" "$org" "$repo")"
     fi
 
-    # Fetch check suites response once for this component
-    suites_response=$(github_api_call "https://api.github.com/repos/$org/$repo/commits/$branch/check-suites")
+    # Determine which commit to check: use promoted commit SHA if available, fall back to branch
+    if [[ -n "$promoted_commit_sha" && "$promoted_commit_sha" != "null" && "$promoted_commit_sha" != "" ]]; then
+        check_ref="$promoted_commit_sha"
+        echo "    ✓ Checking promoted commit: ${promoted_commit_sha:0:8}" >&3
+    else
+        check_ref="$branch"
+        echo "    ⚠️  No commit SHA found in promoted image, checking latest on branch: $branch" >&3
+    fi
+
+    # Fetch check suites response once for this component (using promoted commit, not latest)
+    suites_response=$(github_api_call "https://api.github.com/repos/$org/$repo/commits/$check_ref/check-suites")
     suite_id=$(extract_suite_id "$suites_response")
     suite_status=$(echo "$suites_response" | yq -p=json ".check_suites[] | select(.app.name == \"Red Hat Konflux\") | .status" 2>/dev/null)
 
-    # Fetch all check runs for this component
-    all_check_runs=$(fetch_check_runs "$org" "$repo" "$branch" "$suite_id")
+    # Fetch all check runs for this component (using promoted commit, not latest)
+    all_check_runs=$(fetch_check_runs "$org" "$repo" "$check_ref" "$suite_id")
 
     # Check enterprise contract using pre-fetched data
     ec_result=$(check_enterprise_contract "$application" "$line" "$repo" "$all_check_runs" "$org" "$branch" "$suite_status")
