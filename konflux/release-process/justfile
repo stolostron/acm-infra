@@ -381,7 +381,7 @@ retrieve-fbc-catalog-images app version rc ocp_versions: (_validate_app app) _ch
         # Convert version format: 4.12 -> 4-12
         ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
 
-        release_name="fbc-ocm-${ocp_file_ver}-stage-{{app}}-${short_version}-z${patch}-rc{{rc}}"
+        release_name="{{app}}-fbc-ocm-${ocp_file_ver}-stage-{{app}}-${short_version}-z${patch}-rc{{rc}}"
         [[ "{{debug}}" == "true" ]] && echo "📦 OCP $ocp_ver (${release_name})" >&2
         oc get release "$release_name" -n crt-redhat-acm-tenant -o yaml 2>/dev/null | \
             yq '.status.artifacts.components[] | .ocp_version + ": " + .index_image' || \
