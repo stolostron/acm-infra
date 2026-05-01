@@ -7,21 +7,25 @@ _validate_app app:
         exit 1
     fi
 
+# Private: validate rc parameter is provided
+_validate_rc rc:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{rc}}" ]; then
+        echo "Error: --rc parameter is required" >&2
+        exit 1
+    fi
+
 # Private: validate common inputs
-_validate type app rc:
+_validate type app rc: (_validate_app app)
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ "{{type}}" != "stage" && "{{type}}" != "prod" ]]; then
         echo "Error: type must be 'stage' or 'prod'" >&2
         exit 1
     fi
-    if [[ "{{app}}" != "acm" && "{{app}}" != "mce" ]]; then
-        echo "Error: app must be 'acm' or 'mce'" >&2
-        exit 1
-    fi
-    if [[ "{{type}}" == "stage" && -z "{{rc}}" ]]; then
-        echo "Error: rc parameter is required for stage releases" >&2
-        exit 1
+    if [[ "{{type}}" == "stage" ]]; then
+        just _validate_rc {{rc}}
     fi
 
 # Private: parse version into major.minor.patch.short_version (space-separated)
@@ -47,12 +51,18 @@ _get_author:
     echo "$author"
 
 # Private: build catalog directory paths (returns: release_dir snapshots_dir releases_dir)
-_catalog_dirs app version rc:
+_catalog_dirs type app version rc:
     #!/usr/bin/env bash
     set -euo pipefail
     base_dir="{{justfile_directory()}}/acm-release-management"
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
-    release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
+
+    if [ "{{type}}" = "stage" ]; then
+        release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/rc{{rc}}/catalogs"
+    else
+        release_dir="${base_dir}/${app_upper}/${app_upper}-{{version}}/catalogs"
+    fi
+
     snapshots_dir="${release_dir}/snapshots"
     releases_dir="${release_dir}/releases"
     echo "$release_dir $snapshots_dir $releases_dir"
@@ -158,6 +168,35 @@ _build_base app snapshot release_name release_plan release_type:
 
     [[ "{{debug}}" == "true" ]] && echo "[_build_base] Complete" >&2 || true
 
+# Private: check yq is mikefarah version
+_check_yq:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "🔐 Checking yq version..." >&2
+
+    # Check if yq is installed
+    if ! command -v yq &>/dev/null; then
+        echo "❌ yq command not found" >&2
+        echo "   Install mikefarah/yq: https://github.com/mikefarah/yq" >&2
+        exit 1
+    fi
+
+    # Check version output to ensure it's mikefarah's yq
+    yq_version=$(yq --version 2>&1 || true)
+
+    if ! echo "$yq_version" | grep -q "mikefarah/yq"; then
+        echo "❌ Wrong yq version detected" >&2
+        echo "   Found: $yq_version" >&2
+        echo "   Required: mikefarah/yq (Go implementation)" >&2
+        echo "   Install: https://github.com/mikefarah/yq" >&2
+        echo "" >&2
+        echo "   Note: python-yq and jq-wrapper versions are not supported" >&2
+        exit 1
+    fi
+
+    echo "✅ yq version verified: $yq_version" >&2
+
 # Private: check OpenShift cluster access
 _check_oc_cluster:
     #!/usr/bin/env bash
@@ -245,16 +284,91 @@ _check_gitlab_access:
 
     echo "🔐 Checking GitLab access..." >&2
 
-    # Test SSH authentication
-    if ! ssh -T git@$gitlab_host 2>&1 | grep -q "Welcome to GitLab"; then
-        # Try git ls-remote as fallback
-        if ! git ls-remote git@$gitlab_host:$upstream.git HEAD &>/dev/null; then
-            echo "❌ Cannot access GitLab at $gitlab_host" >&2
-            echo "   Please check:" >&2
-            echo "   - VPN connection to Red Hat network" >&2
-            echo "   - SSH key configured for $gitlab_host" >&2
-            exit 1
-        fi
+    # Try SSH first
+    if git ls-remote "git@${gitlab_host}:${upstream}.git" HEAD &>/dev/null; then
+        echo "✅ GitLab SSH access verified" >&2
+        echo "ssh"
+        exit 0
     fi
 
-    echo "✅ GitLab access verified" >&2
+    # Fallback to HTTPS
+    if git ls-remote "https://${gitlab_host}/${upstream}.git" HEAD &>/dev/null; then
+        echo "✅ GitLab HTTPS access verified" >&2
+        echo "https"
+        exit 0
+    fi
+
+    # Both failed
+    echo "❌ Cannot access GitLab at $gitlab_host" >&2
+    echo "   Please check:" >&2
+    echo "   - VPN connection to Red Hat network" >&2
+    echo "   - SSH key configured at https://$gitlab_host/-/profile/keys OR" >&2
+    echo "   - Git credentials configured (git config credential.helper)" >&2
+    exit 1
+
+# Private: check GitHub access via gh CLI
+_check_github_access:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "🔐 Checking GitHub CLI access..." >&2
+
+    # Check if gh is installed
+    if ! command -v gh &>/dev/null; then
+        echo "❌ gh CLI not found" >&2
+        echo "   Install: https://cli.github.com/" >&2
+        exit 1
+    fi
+
+    # Check authentication
+    if ! gh auth status &>/dev/null; then
+        echo "❌ Not authenticated with GitHub CLI" >&2
+        echo "   Run: gh auth login" >&2
+        exit 1
+    fi
+
+    echo "✅ GitHub CLI access verified" >&2
+
+# Private: get OCP versions from catalog config for a given app and version
+_get_ocp_versions app version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Parse version to get major.minor
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
+
+    # Determine catalog repo branch and config file
+    if [ "{{app}}" = "acm" ]; then
+        catalog_branch="acm-redhat-operators"
+        config_file="acm-redhat-operators-config.yaml"
+    else
+        catalog_branch="mce-redhat-operators"
+        config_file="mce-redhat-operators-config.yaml"
+    fi
+
+    # Clone or update catalog repo
+    catalog_dir="{{justfile_directory()}}/bundle-repos/acm-mce-operator-catalogs"
+    mkdir -p "{{justfile_directory()}}/bundle-repos"
+
+    if [ ! -d "$catalog_dir" ]; then
+        gh repo clone "stolostron/acm-mce-operator-catalogs" "$catalog_dir" >&2
+    fi
+
+    cd "$catalog_dir"
+    git fetch origin >&2
+    git checkout "$catalog_branch" >&2
+    git pull origin "$catalog_branch" >&2
+
+    # Extract OCP versions for this release version
+    version_key="v${major}.${minor}"
+    ocp_versions_yaml=$(yq ".packages[0].versions[] | select(.version == \"${version_key}\") | .catalogs[]" "config/${config_file}")
+
+    if [ -z "$ocp_versions_yaml" ]; then
+        echo "❌ No catalog config found for version ${version_key}" >&2
+        echo "   Available versions:" >&2
+        yq '.packages[0].versions[].version' "config/${config_file}" >&2
+        exit 1
+    fi
+
+    # Convert ocp-X.Y format to X.Y and join with commas
+    echo "$ocp_versions_yaml" | sed 's/ocp-//' | tr '\n' ',' | sed 's/,$//'

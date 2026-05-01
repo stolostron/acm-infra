@@ -5,239 +5,331 @@ Automation tools for creating and managing ACM and MCE releases using Konflux.
 ## Prerequisites
 
 - `jira` CLI configured with Red Hat Jira access
-- `oc` CLI logged into the Konflux cluster
-- `yq` and `jq` installed
+- `oc` CLI logged into the Konflux cluster (stone-prd-rh01.pg1f.p1.openshiftapps.com)
+- `yq` (mikefarah version) and `jq` installed
 - `gh` CLI configured with GitHub access
 - Git user.name and user.email configured
+- Python 3 (for catalog splitting)
+- VPN connection to Red Hat network (for GitLab access)
 
 ## Quick Start
 
-The main workflow uses the `release` recipe to generate, save, and apply release files:
+Run `just help` to see all available recipes and examples.
+
+### Complete Release Workflow
 
 ```bash
-# Stage release (dry-run by default)
-just release payload stage acm 2.15.1 snapshot-release-acm-215-abc123 1
+# 1. Create payload release
+just release payload stage acm 2.12.42 snapshot-xyz --rc 1
 
-# Production release (live)
-just release payload prod acm 2.15.1 snapshot-release-acm-215-xyz789 "" skip_confirm=true dry_run=false
+# 2. Update bundle snapshot (creates PR to operator bundle repo)
+just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false
+
+# 3. Wait for PR merge, get snapshot from PR
+just get-snapshot-from-pr acm 3174
+
+# 4. Create bundle release  
+just release bundle stage acm 2.12.42 snapshot-bundle-acm-212-abc --rc 1
+
+# 5. Update catalog request (creates PR to catalog repo)
+just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
+
+# 6. Create catalog release (OCP versions auto-detected)
+just release catalog stage acm 2.12.42 snapshot-def --rc 1
+
+# 7. Monitor catalog releases
+just check-catalog-releases acm 2.12.42 1
 ```
 
-## Parameter Syntax
+## Main Workflows
 
-Recipes accept both positional and named parameters:
+### `release` - Unified Release Workflow
 
-- **Positional parameters** (required): Must be provided in order
-  - Example: `release payload prod acm 2.15.1 snapshot-xyz`
-
-- **Named parameters** (optional): Can be provided in any order using `name=value` syntax
-  - Example: `dry_run=false skip_confirm=true rc=4`
-  - You can skip parameters that have defaults
-  - Order doesn't matter for named parameters
-
-**Full example:**
-```bash
-# These are equivalent:
-just release payload stage acm 2.15.1 snapshot-xyz rc=4 skip_confirm=true dry_run=false
-just release payload stage acm 2.15.1 snapshot-xyz dry_run=false rc=4 skip_confirm=true
-just release payload stage acm 2.15.1 snapshot-xyz skip_confirm=true dry_run=false rc=4
-
-# Skip parameters with defaults (rc defaults to "")
-just release payload prod acm 2.15.1 snapshot-xyz skip_confirm=true dry_run=false
-```
-
-## Available Recipes
-
-### Main Release Workflow
-
-#### `release`
 Generate YAML, save to disk, and apply to cluster.
 
 **Syntax:**
 ```bash
-just release <target> <type> <app> <version> <snapshot> [rc] [skip_confirm] [dry_run]
+just release <target> <type> <app> <version> <snapshot> [--rc <N>] [--dry_run false]
 ```
 
 **Parameters:**
 - `target`: "payload", "bundle", or "catalog"
 - `type`: "stage" or "prod"
 - `app`: "acm" or "mce"
-- `version`: Version string (e.g., "2.15.1")
+- `version`: Version string (e.g., "2.12.42")
 - `snapshot`: Snapshot name from cluster
-- `rc`: RC number (required for stage releases)
-- `skip_confirm`: "true" to skip confirmation prompt (default: "false")
-- `dry_run`: "true" for dry-run, "false" for live apply (default: "true")
+- `--rc <N>`: RC number (required for stage releases)
+- `--dry_run false`: Apply live to cluster (default: true for dry-run)
 
 **Examples:**
 ```bash
-# Stage payload with RC1 (dry-run)
-just release payload stage acm 2.15.1 snapshot-xyz 1
+# Stage payload (dry-run)
+just release payload stage acm 2.12.42 snapshot-xyz --rc 1
 
-# Prod bundle (live, skip confirm)
-just release bundle prod mce 2.10.1 snapshot-abc "" skip_confirm=true dry_run=false
+# Prod bundle (live)
+just release bundle prod mce 2.10.1 snapshot-abc --dry_run false
 
-# Prod catalog (dry-run with confirm)
-just release catalog prod acm 2.15.1 snapshot-xyz
+# Catalog release with auto-detected OCP versions
+just release catalog stage acm 2.12.42 snapshot-def --rc 1
 ```
 
 **What it does:**
-1. Creates directory structure: `ACM/ACM-2.15.1/` or `ACM/ACM-2.15.1/rc1/`
-2. Fetches snapshot from cluster and saves it
-3. Generates the appropriate YAML file
-4. Shows the YAML to you
-5. Prompts for confirmation (unless skipped)
+1. Clones acm-release-management repo
+2. Creates directory structure
+3. Fetches snapshot from cluster and saves it
+4. Generates the appropriate YAML file (payload/bundle/catalog)
+5. Shows the YAML and prompts for confirmation
 6. Applies to cluster (dry-run or live)
 
-### Query Recipes
+For **catalog** releases, OCP versions are automatically detected from the catalog config in `acm-mce-operator-catalogs` based on the version.
 
-#### `query-bugs`
-Query bugs from Jira for a specific version.
+---
 
+### `generate-snapshot` - Update Snapshot Files and Create PRs
+
+**Syntax:**
 ```bash
-just query-bugs <app> <version> [bundle]
+just generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run false]
 ```
 
-**Parameters:**
-- `bundle`: "true" for bundle-bugs only, "false" to exclude bundle-bugs (default: "false")
+**Targets:**
+- `bundle`: Updates operator bundle repository (acm-operator-bundle or mce-operator-bundle)
+  - Compares payload snapshot with `latest-snapshot.yaml`
+  - If different: replaces file completely
+  - If identical: increments `.metadata.generation`
+  - Creates PR to release-X.Y or backplane-X.Y branch
+
+- `catalog`: Updates catalog request in acm-mce-operator-catalogs
+  - Extracts bundle container image from bundle snapshot
+  - Updates `catalog-request.yaml` with new image and timestamp
+  - Creates PR to acm-redhat-operators or mce-redhat-operators branch
 
 **Examples:**
 ```bash
-# Exclude bundle bugs (default)
-just query-bugs acm 2.15.1
+# Update bundle snapshot (dry-run)
+just generate-snapshot bundle stage acm 2.12.42 --rc 1
 
-# Query bundle bugs only
-just query-bugs acm 2.15.1 true
+# Update catalog request (live)
+just generate-snapshot catalog prod mce 2.10.1 --dry_run false
 ```
 
-#### `query-cves`
-Query CVEs from Jira for a specific version.
+**Prerequisites:**
+- `release payload` must be run first for bundle target
+- `release bundle` must be run first for catalog target
+
+---
+
+## Query & Generate
+
+### Query Recipes
 
 ```bash
-just query-cves <app> <version>
-```
+# Query bugs from Jira
+just query-bugs acm 2.12.42              # Exclude bundle bugs
+just query-bugs acm 2.12.42 true         # Bundle bugs only
 
-**Example:**
-```bash
+# Query CVEs from Jira
 just query-cves mce 2.10.1
 ```
 
-**Note:** Exits with code 1 if any FIXME entries exist (missing component mappings).
-
 ### Generate Recipes
 
-Generate release YAMLs (output to stdout).
+Generate release YAMLs (output to stdout):
 
 ```bash
-just generate-payload <type> <app> <version> <snapshot> [rc]
-just generate-catalog <type> <app> <version> <snapshot> [rc]
-just generate-bundle <type> <app> <version> <snapshot> [rc]
-```
-
-**Example:**
-```bash
-just generate-payload prod acm 2.15.1 snapshot-xyz > payload.yaml
+just generate-payload stage acm 2.12.42 snapshot-xyz --rc 1
+just generate-bundle prod mce 2.10.1 snapshot-abc
+just generate-catalog acm 2.12.42 snapshot-def 1 "4.14,4.15,4.16"
 ```
 
 ### Apply Recipes
 
-Generate and apply release YAMLs directly to the cluster.
+Generate and apply directly to cluster:
 
 ```bash
-just apply-payload <type> <app> <version> <snapshot> [rc] [skip_confirm] [dry_run]
-just apply-catalog <type> <app> <version> <snapshot> [rc] [skip_confirm] [dry_run]
-just apply-bundle <type> <app> <version> <snapshot> [rc] [skip_confirm] [dry_run]
+just apply-payload stage acm 2.12.42 snapshot-xyz --rc 1 --dry_run false
+just apply-bundle prod mce 2.10.1 snapshot-abc --dry_run false
+just apply-catalog acm 2.12.42 1 "4.14,4.15" --dry_run false
+```
+
+---
+
+## Monitoring
+
+### Monitor Release Status
+
+```bash
+# Monitor single release
+just check-release stage-publish-acm-212-z42-rc1
+
+# Monitor catalog releases (auto-detects OCP versions)
+just check-catalog-releases acm 2.12.42 1
+
+# Monitor catalog releases (manual OCP versions)
+just check-catalog-releases acm 2.12.42 1 "4.14-4.16"
+
+# Monitor Konflux commit pipeline
+just check-commit abc123def456 acm-operator
+
+# Monitor GitHub PR
+just check-pr 123 stolostron/acm-mce-operator-catalogs
+```
+
+All monitoring recipes send desktop notifications and play sounds when complete/failed.
+
+---
+
+## Utilities
+
+### `get-snapshot-from-pr` - Get Snapshot from PR
+
+Get snapshot name from a merged PR number.
+
+**Syntax:**
+```bash
+just get-snapshot-from-pr <app> <pr-number>
 ```
 
 **Example:**
 ```bash
-just apply-payload prod acm 2.15.1 snapshot-xyz "" false false
+just get-snapshot-from-pr mce 3174
+# Output: bundle-release-mce-211-20260501-132458-000
 ```
+
+**How it works:**
+1. Looks up merge commit SHA from GitHub PR
+2. Finds snapshot with matching `pac.test.appstudio.openshift.io/sha` label
+
+---
+
+### `get-advisory` - Get Advisory from Release
+
+Get advisory ID from release status.
+
+**Syntax:**
+```bash
+just get-advisory <release-name>
+```
+
+**Example:**
+```bash
+just get-advisory stage-publish-acm-212-z42-rc1
+# Output: RHSA-2024:1234
+```
+
+---
+
+### `retrieve-fbc-catalog-images` - Get Catalog Images
+
+Retrieve FBC catalog images from releases.
+
+**Syntax:**
+```bash
+just retrieve-fbc-catalog-images <app> <version> <rc> [ocp_versions]
+```
+
+**Examples:**
+```bash
+# Auto-detect OCP versions
+just retrieve-fbc-catalog-images acm 2.12.42 1
+
+# Manual OCP versions
+just retrieve-fbc-catalog-images acm 2.12.42 1 "4.14,4.15,4.16"
+```
+
+---
+
+### Other Utilities
+
+```bash
+# Clone release management repo and create branch
+just clone-release-mgmt stage-release-acm-212-z42-rc1
+
+# Remove cloned repos
+just cleanup
+```
+
+---
 
 ## Configuration
 
 ### Variables
 
-Set these at the command line or in your environment:
-
-#### `debug`
-Enable debug output (default: "false")
+Set at the command line:
 
 ```bash
-just debug=true release payload prod acm 2.15.1 snapshot-xyz
+# Enable debug output
+just debug=true release payload stage acm 2.12.42 snapshot-xyz --rc 1
+
+# Use custom workspace directory
+just workspace=/path/to/releases release payload prod acm 2.12.42 snapshot-xyz
 ```
 
-#### `workspace`
-Base directory for saving release files (default: ".")
-
-```bash
-just workspace=/path/to/releases release payload prod acm 2.15.1 snapshot-xyz
-```
-
-## Directory Structure
-
-Release files are saved following this structure:
+### Directory Structure
 
 **Production:**
 ```
-workspace/
+acm-release-management/
   ACM/
-    ACM-2.15.1/
-      snapshot-acm-215-payload-prod-z1.yaml
-      acm-215-payload-prod-z1.yaml
-      acm-215-catalog-prod-z1.yaml
-      acm-215-bundle-prod-z1.yaml
+    ACM-2.12.42/
+      snapshot-acm-212-payload-prod-z42.yaml
+      acm-212-payload-prod-z42.yaml
+      acm-212-bundle-prod-z42.yaml
 ```
 
 **Stage:**
 ```
-workspace/
+acm-release-management/
   MCE/
     MCE-2.10.1/
       rc1/
         snapshot-mce-210-payload-stage-z1-rc1.yaml
         mce-210-payload-stage-z1-rc1.yaml
-        mce-210-catalog-stage-z1-rc1.yaml
         mce-210-bundle-stage-z1-rc1.yaml
+        catalogs/
+          snapshots/
+            snapshot-mce-fbc-ocm-4-14-stage-mce-210-z1-rc1.yaml
+            ...
+          releases/
+            mce-fbc-ocm-4-14-stage-mce-210-z1-rc1.yaml
+            ...
 ```
 
-## Common Workflows
+---
 
-### Creating a Stage Release
+## Important Notes
 
-1. Find the snapshot name from Konflux
-2. Run the release recipe with stage type:
-   ```bash
-   just release payload stage acm 2.15.1 snapshot-release-acm-215-abc123 1
-   ```
-3. Review the generated YAML
-4. Press Enter to apply (dry-run)
-5. If satisfied, re-run with `dry_run=false`
+### Y-stream vs Z-stream Releases
 
-### Creating a Production Release
+- **Y-stream releases** (X.Y.0): Skip bug/CVE queries, always RHEA type
+- **Z-stream releases** (X.Y.Z where Z > 0): Include bugs and CVEs
+  - RHSA if CVEs present
+  - RHBA if bugs present (no CVEs)
+  - RHEA if neither
 
-1. Ensure all RCs are complete and approved
-2. Find the final snapshot name
-3. Run the release recipe:
-   ```bash
-   just release payload prod acm 2.15.1 snapshot-release-acm-215-xyz789
-   ```
-4. Review carefully
-5. Apply live with:
-   ```bash
-   just release payload prod acm 2.15.1 snapshot-release-acm-215-xyz789 "" skip_confirm=true dry_run=false
-   ```
+### Bundle Bugs
 
-### Querying Release Contents
+Bundle-specific bugs are tracked separately. Use `bundle=true` parameter with `query-bugs` to retrieve them.
 
-```bash
-# Check what bugs will be included
-just query-bugs acm 2.15.1 false
+### Catalog OCP Versions
 
-# Check what CVEs will be included
-just query-cves acm 2.15.1
+For catalog releases, OCP versions are automatically detected from the catalog config files in `acm-mce-operator-catalogs`:
+- ACM: `config/acm-redhat-operators-config.yaml`
+- MCE: `config/mce-redhat-operators-config.yaml`
 
-# Generate payload to preview
-just generate-payload prod acm 2.15.1 snapshot-xyz
-```
+The versions are pulled from `.packages[0].versions[]` where `.version` matches `vX.Y`.
+
+Manual override is still possible: `--ocp_versions "4.14,4.15"` or `--ocp_versions "4.14-4.17"`.
+
+### Dry-run by Default
+
+All apply operations default to **dry-run** for safety. Use `--dry_run false` to apply live.
+
+### Git Commits
+
+All commits include `Signed-off-by` and `Co-Authored-By` lines as required by the repository.
+
+---
 
 ## Troubleshooting
 
@@ -251,25 +343,45 @@ git config user.email "your.email@redhat.com"
 
 ### "Failed to fetch snapshot from cluster"
 
-Ensure you're logged into the Konflux cluster and the snapshot exists:
+Ensure you're logged into the Konflux cluster:
 ```bash
-oc get snapshot <snapshot-name> -n crt-redhat-acm-tenant
+oc login https://console-openshift-console.apps.stone-prd-rh01.pg1f.p1.openshiftapps.com/
+oc project crt-redhat-acm-tenant
+oc get snapshot <snapshot-name>
 ```
+
+### "Not authenticated with GitHub CLI"
+
+Authenticate with gh:
+```bash
+gh auth login
+```
+
+### "Wrong yq version detected"
+
+This tooling requires mikefarah/yq (Go implementation), not python-yq or jq-wrapper.
+Install: https://github.com/mikefarah/yq
+
+### "Cannot access GitLab"
+
+Ensure you're connected to Red Hat VPN and have either:
+- SSH key configured at https://gitlab.cee.redhat.com/-/profile/keys OR
+- Git credentials configured (git config credential.helper)
 
 ### "FIXME:" entries in CVE output
 
-This means a component is missing from the component registry. The CVE query will exit with code 1 to prevent accidental use. You need to add the missing component mapping before proceeding.
+Component mapping is missing from the component registry. Add the missing component before proceeding.
 
 ### Jira query returns no results
 
-- Verify the version format matches Jira (e.g., "acm 2.15.1", not "ACM 2.15.1")
-- Check that issues exist in Jira with the correct fixVersion
-- For bugs, ensure they have doc labels or SFDC cases attached
+- Verify version format matches Jira (e.g., "acm 2.12.42")
+- Check issues exist with correct fixVersion
+- For bugs, ensure doc labels or SFDC cases are attached
 
-## Notes
+---
 
-- **Y-stream releases** (X.Y.0) skip bug/CVE queries as they don't include fixes
-- **Z-stream releases** (X.Y.Z where Z > 0) include bugs and CVEs
-- **Bundle releases** use `bundle=true` flag to query bundle-specific bugs
-- All apply operations default to **dry-run** for safety
-- Use `skip_confirm=true` carefully - it bypasses the confirmation prompt
+## Getting Help
+
+Run `just help` to see all available recipes with examples.
+
+For issues or feedback, see the repository's issue tracker.
