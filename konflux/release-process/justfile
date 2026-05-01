@@ -575,7 +575,7 @@ check-release release:
             exit 0
         fi
 
-        if [[ "$STATUS" == "False" && "{{release}}" == "Failed" ]]; then
+        if [[ "$STATUS" == "False" && "$PROGRESSING" == "Failed" ]]; then
             notify-send "Release Failed" "{{release}} failed!"
             which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
             exit 1
