@@ -66,6 +66,7 @@ help:
     @echo "UTILITIES:"
     @echo "  retrieve-fbc-catalog-images <app> <version> <rc> <ocp_versions>"
     @echo "  get-snapshot-from-pr <pr-number> <app>"
+    @echo "  get-advisory <release-name>"
     @echo "  clone-release-mgmt <branch-name>"
     @echo "  cleanup - Remove cloned repos"
     @echo ""
@@ -857,6 +858,10 @@ generate-catalog app version snapshot rc ocp_versions: (_validate_app app) _chec
     echo "   Directory: ${release_dir}"
     echo "   Snapshots: ${count} files in snapshots/"
     echo "   Releases: ${count} files in releases/"
+
+# Get advisory from release
+get-advisory release_name: _check_oc_cluster
+    oc get release {{release_name}} -n crt-redhat-acm-tenant -o yaml | yq -r .status.artifacts.advisory
 
 # Remove cloned repos
 cleanup:
