@@ -65,6 +65,7 @@ help:
     @echo ""
     @echo "UTILITIES:"
     @echo "  retrieve-fbc-catalog-images <app> <version> <rc> <ocp_versions>"
+    @echo "  get-snapshot-from-pr <pr-number> [repo] [namespace]"
     @echo "  clone-release-mgmt <branch-name>"
     @echo "  cleanup - Remove cloned repos"
     @echo ""
@@ -872,6 +873,41 @@ cleanup:
             echo "ℹ️  $repo_dir does not exist"
         fi
     done
+
+# Get snapshot name from merged PR number
+get-snapshot-from-pr pr_number repo="stolostron/mce-operator-bundle" namespace="crt-redhat-acm-tenant": _check_github_access _check_oc_cluster
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Get merge commit SHA from PR
+    echo "🔍 Fetching commit SHA from PR #{{pr_number}}..." >&2
+    commit_sha=$(gh pr view {{pr_number}} --repo {{repo}} --json mergeCommit --jq '.mergeCommit.oid')
+
+    if [ -z "$commit_sha" ] || [ "$commit_sha" = "null" ]; then
+        echo "❌ Failed to get merge commit from PR #{{pr_number}}" >&2
+        echo "   PR may not be merged yet" >&2
+        exit 1
+    fi
+
+    echo "  Commit SHA: $commit_sha" >&2
+    echo "" >&2
+
+    # Find snapshot with that SHA
+    echo "🔍 Finding snapshot with commit SHA..." >&2
+    snapshot_name=$(oc get snapshots -n {{namespace}} \
+        -l "pac.test.appstudio.openshift.io/sha=$commit_sha" \
+        -o jsonpath='{.items[0].metadata.name}')
+
+    if [ -z "$snapshot_name" ]; then
+        echo "❌ No snapshot found for commit $commit_sha" >&2
+        exit 1
+    fi
+
+    echo "  Snapshot: $snapshot_name" >&2
+    echo "" >&2
+
+    # Output snapshot name to stdout
+    echo "$snapshot_name"
 
 # Clone release management repo and create a branch
 clone-release-mgmt branch_name:
