@@ -6,10 +6,11 @@ Automation tools for creating and managing ACM and MCE releases using Konflux.
 
 - `jira` CLI configured with Red Hat Jira access
 - `oc` CLI logged into the Konflux cluster (stone-prd-rh01.pg1f.p1.openshiftapps.com)
-- `yq` and `jq` installed
+- `yq` (mikefarah version) and `jq` installed
 - `gh` CLI configured with GitHub access
 - Git user.name and user.email configured
 - Python 3 (for catalog splitting)
+- VPN connection to Red Hat network (for GitLab access)
 
 ## Quick Start
 
@@ -19,24 +20,30 @@ Run `just help` to see all available recipes and examples.
 
 ```bash
 # 1. Create payload release
-just release payload stage acm 2.12.42 snapshot-release-acm-212-xyz --rc 1
+just release payload stage acm 2.12.42 snapshot-xyz --rc 1
 
 # 2. Update bundle snapshot (creates PR to operator bundle repo)
 just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false
 
-# 3. Create bundle release  
+# 3. Wait for PR merge, get snapshot from PR
+just get-snapshot-from-pr acm 3174
+
+# 4. Create bundle release  
 just release bundle stage acm 2.12.42 snapshot-bundle-acm-212-abc --rc 1
 
-# 4. Update catalog request (creates PR to catalog repo)
+# 5. Update catalog request (creates PR to catalog repo)
 just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
 
-# 5. Create catalog release (OCP versions auto-detected from config)
-just release catalog stage acm 2.12.42 snapshot-catalog-acm-212-def --rc 1
+# 6. Create catalog release (OCP versions auto-detected)
+just release catalog stage acm 2.12.42 snapshot-def --rc 1
+
+# 7. Monitor catalog releases
+just check-catalog-releases acm 2.12.42 1
 ```
 
 ## Main Workflows
 
-### `release` - Complete Release Workflow
+### `release` - Unified Release Workflow
 
 Generate YAML, save to disk, and apply to cluster.
 
@@ -68,13 +75,13 @@ just release catalog stage acm 2.12.42 snapshot-def --rc 1
 
 **What it does:**
 1. Clones acm-release-management repo
-2. Creates directory structure: `ACM/ACM-2.12.42/rc1/`
+2. Creates directory structure
 3. Fetches snapshot from cluster and saves it
 4. Generates the appropriate YAML file (payload/bundle/catalog)
 5. Shows the YAML and prompts for confirmation
 6. Applies to cluster (dry-run or live)
 
-For **catalog** releases, OCP versions are automatically detected from the catalog config in `acm-mce-operator-catalogs` based on the version. Manual override is still possible with `ocp_versions="4.14,4.15"`.
+For **catalog** releases, OCP versions are automatically detected from the catalog config in `acm-mce-operator-catalogs` based on the version.
 
 ---
 
@@ -155,7 +162,10 @@ just apply-catalog acm 2.12.42 1 "4.14,4.15" --dry_run false
 # Monitor single release
 just check-release stage-publish-acm-212-z42-rc1
 
-# Monitor catalog releases (checks multiple OCP versions)
+# Monitor catalog releases (auto-detects OCP versions)
+just check-catalog-releases acm 2.12.42 1
+
+# Monitor catalog releases (manual OCP versions)
 just check-catalog-releases acm 2.12.42 1 "4.14-4.16"
 
 # Monitor Konflux commit pipeline
@@ -171,22 +181,72 @@ All monitoring recipes send desktop notifications and play sounds when complete/
 
 ## Utilities
 
-### Retrieve Catalog Images
+### `get-snapshot-from-pr` - Get Snapshot from PR
 
+Get snapshot name from a merged PR number.
+
+**Syntax:**
 ```bash
+just get-snapshot-from-pr <app> <pr-number>
+```
+
+**Example:**
+```bash
+just get-snapshot-from-pr mce 3174
+# Output: bundle-release-mce-211-20260501-132458-000
+```
+
+**How it works:**
+1. Looks up merge commit SHA from GitHub PR
+2. Finds snapshot with matching `pac.test.appstudio.openshift.io/sha` label
+
+---
+
+### `get-advisory` - Get Advisory from Release
+
+Get advisory ID from release status.
+
+**Syntax:**
+```bash
+just get-advisory <release-name>
+```
+
+**Example:**
+```bash
+just get-advisory stage-publish-acm-212-z42-rc1
+# Output: RHSA-2024:1234
+```
+
+---
+
+### `retrieve-fbc-catalog-images` - Get Catalog Images
+
+Retrieve FBC catalog images from releases.
+
+**Syntax:**
+```bash
+just retrieve-fbc-catalog-images <app> <version> <rc> [ocp_versions]
+```
+
+**Examples:**
+```bash
+# Auto-detect OCP versions
+just retrieve-fbc-catalog-images acm 2.12.42 1
+
+# Manual OCP versions
 just retrieve-fbc-catalog-images acm 2.12.42 1 "4.14,4.15,4.16"
 ```
 
-### Clone Release Management Repo
+---
+
+### Other Utilities
 
 ```bash
+# Clone release management repo and create branch
 just clone-release-mgmt stage-release-acm-212-z42-rc1
-```
 
-### Cleanup
-
-```bash
-just cleanup  # Removes acm-release-management clone
+# Remove cloned repos
+just cleanup
 ```
 
 ---
@@ -226,24 +286,12 @@ acm-release-management/
         snapshot-mce-210-payload-stage-z1-rc1.yaml
         mce-210-payload-stage-z1-rc1.yaml
         mce-210-bundle-stage-z1-rc1.yaml
-      rc2/
-        ...
-```
-
-**Catalog:**
-```
-acm-release-management/
-  ACM/
-    ACM-2.12.42/
-      rc1/
         catalogs/
           snapshots/
-            snapshot-acm-fbc-ocm-4-14-stage-acm-212-z42-rc1.yaml
-            snapshot-acm-fbc-ocm-4-15-stage-acm-212-z42-rc1.yaml
+            snapshot-mce-fbc-ocm-4-14-stage-mce-210-z1-rc1.yaml
             ...
           releases/
-            acm-fbc-ocm-4-14-stage-acm-212-z42-rc1.yaml
-            acm-fbc-ocm-4-15-stage-acm-212-z42-rc1.yaml
+            mce-fbc-ocm-4-14-stage-mce-210-z1-rc1.yaml
             ...
 ```
 
@@ -308,6 +356,17 @@ Authenticate with gh:
 ```bash
 gh auth login
 ```
+
+### "Wrong yq version detected"
+
+This tooling requires mikefarah/yq (Go implementation), not python-yq or jq-wrapper.
+Install: https://github.com/mikefarah/yq
+
+### "Cannot access GitLab"
+
+Ensure you're connected to Red Hat VPN and have either:
+- SSH key configured at https://gitlab.cee.redhat.com/-/profile/keys OR
+- Git credentials configured (git config credential.helper)
 
 ### "FIXME:" entries in CVE output
 
