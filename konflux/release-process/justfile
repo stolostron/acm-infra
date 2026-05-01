@@ -64,7 +64,7 @@ help:
     @echo "    Monitor GitHub action and PR merge status"
     @echo ""
     @echo "UTILITIES:"
-    @echo "  retrieve-fbc-catalog-images <app> <version> <rc> <ocp_versions>"
+    @echo "  retrieve-fbc-catalog-images <app> <version> <rc> [ocp_versions]"
     @echo "  get-snapshot-from-pr <pr-number> <app>"
     @echo "  get-advisory <release-name>"
     @echo "  clone-release-mgmt <branch-name>"
@@ -366,15 +366,21 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     just _apply "$bundle" {{skip_confirm}} {{dry_run}}
 
 # Retrieve FBC catalog images from releases
-retrieve-fbc-catalog-images app version rc ocp_versions: (_validate_app app) _check_oc_cluster
+retrieve-fbc-catalog-images app version rc ocp_versions="": (_validate_app app) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
+    # Auto-detect OCP versions if not provided
+    ocp_versions_resolved="{{ocp_versions}}"
+    if [[ -z "{{ocp_versions}}" ]]; then
+        ocp_versions_resolved=$(just _get_ocp_versions {{app}} {{version}})
+    fi
+
     # Parse OCP versions
-    versions=($(just _parse_ocp_versions {{ocp_versions}}))
+    versions=($(just _parse_ocp_versions "$ocp_versions_resolved"))
 
     # Retrieve index images for each version
     for ocp_ver in "${versions[@]}"; do
