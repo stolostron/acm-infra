@@ -519,7 +519,7 @@ check-catalog-releases app version rc ocp_versions="":
 
                 # Send notification
                 notify-send "Catalog Release Complete" "$release_name completed ($COMPLETED/$TOTAL)"
-                which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+                which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
 
                 echo "  ✅ $release_name: Complete"; ((LINE_COUNT++))
             elif [[ "$STATUS" == "False" && "$PROGRESSING" == "Failed" ]]; then
@@ -527,7 +527,7 @@ check-catalog-releases app version rc ocp_versions="":
                 ((COMPLETED++))
 
                 notify-send "Catalog Release Failed" "$release_name failed ($COMPLETED/$TOTAL)"
-                which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+                which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
 
                 echo "  ❌ $release_name: Failed"; ((LINE_COUNT++))
             else
@@ -565,13 +565,13 @@ check-release release:
 
         if [[ "$STATUS" == "True" ]]; then
             notify-send "Release Ready" "{{release}} is released!"
-            which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+            which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
             exit 0
         fi
 
         if [[ "$STATUS" == "False" && "{{release}}" == "Failed" ]]; then
             notify-send "Release Failed" "{{release}} failed!"
-            which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+            which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
             exit 1
         fi
 
@@ -620,7 +620,7 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
             else
                 echo "$(date): All $MAX_RUNS PipelineRuns completed and garbage collected"; ((LINE_COUNT++))
                 notify-send "Commit Builds Complete" "Commit {{commit_sha}} - All $MAX_RUNS builds finished and cleaned up"
-                which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+                which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
                 exit 0
             fi
         fi
@@ -659,7 +659,7 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
 
         if [[ $RUNNING -eq 0 ]]; then
             notify-send "Commit Builds Complete" "Commit {{commit_sha}} - All $TOTAL builds finished (Success: $SUCCESS, Failed: $FAILED)"
-            which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+            which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
             exit 0
         fi
 
@@ -716,7 +716,7 @@ check-pr pr_number repo="stolostron/acm-mce-operator-catalogs" workflow="Gen Cat
                 break
             else
                 notify-send "GitHub Action Failed" "PR #{{pr_number}} workflow failed: $CONCLUSION"
-                which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+                which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
                 exit 1
             fi
         fi
@@ -745,13 +745,13 @@ check-pr pr_number repo="stolostron/acm-mce-operator-catalogs" workflow="Gen Cat
 
         if [[ "$STATE" == "MERGED" ]]; then
             notify-send "PR Merged" "PR #{{pr_number}} has been merged!"
-            which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+            which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
             exit 0
         fi
 
         if [[ "$STATE" == "CLOSED" ]]; then
             notify-send "PR Closed" "PR #{{pr_number}} was closed without merging"
-            which pw-play 2>/dev/null && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5
+            which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
             exit 1
         fi
 
