@@ -478,7 +478,7 @@ check-catalog-releases app version rc ocp_versions="":
     declare -A RELEASES
     for ocp_ver in "${versions[@]}"; do
         ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
-        release_name="fbc-ocm-${ocp_file_ver}-stage-{{app}}-${short_version}-z${patch}-rc{{rc}}"
+        release_name="{{app}}-fbc-ocm-${ocp_file_ver}-stage-{{app}}-${short_version}-z${patch}-rc{{rc}}"
         RELEASES[$release_name]="pending"
     done
 
