@@ -874,7 +874,7 @@ cleanup:
     done
 
 # Clone release management repo and create a branch
-clone-release-mgmt branch_name: _check_gitlab_access
+clone-release-mgmt branch_name:
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -884,7 +884,8 @@ clone-release-mgmt branch_name: _check_gitlab_access
 
     # Clone if not exists (use method determined by access check)
     if [ ! -d "$repo_dir" ]; then
-        if [ "${GITLAB_CLONE_METHOD:-ssh}" = "ssh" ]; then
+        clone_method=$(just _check_gitlab_access)
+        if [ "$clone_method" = "ssh" ]; then
             git clone "git@${gitlab_host}:${upstream}.git"
         else
             git clone "https://${gitlab_host}/${upstream}.git"
