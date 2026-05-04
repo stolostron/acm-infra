@@ -157,7 +157,7 @@ query-bugs app version bundle="false": _check_yq
     fi
 
     # Build the JQL query for bugs
-    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC_Cases_Counter\" > 0)${bundle_clause}"
+    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and statuscategory in (done) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC_Cases_Counter\" > 0)${bundle_clause}"
 
     # Query Jira for bugs
     jira_output=$(jira issue list -q "$jql_query" --raw 2>&1) || {
