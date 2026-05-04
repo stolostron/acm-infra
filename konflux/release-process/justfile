@@ -1012,14 +1012,14 @@ stage-release target app version snapshot rc="" skip_confirm="false" dry_run="tr
         echo "  ✓ Detected OCP versions: ${ocp_versions_resolved}" >&2
     fi
 
-    # If workspace is default, clone the release management repo
-    workspace_dir="{{workspace}}"
-    if [ "$workspace_dir" = "." ]; then
-        # Clone release management repo and create branch
-        branch_name="stage-release-{{app}}-${short_version}-z${patch}-rc{{rc}}"
-        just clone-release-mgmt "$branch_name"
-        workspace_dir="acm-release-management"
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
     fi
+
+    # Ensure workspace exists and correct branch checked out
+    workspace_dir=$(just _ensure_release_mgmt_workspace stage {{app}} {{version}} $rc_arg)
 
     # Build directory path (stage always goes in rc subdirectory)
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
@@ -1087,13 +1087,14 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true": (_val
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Find or clone acm-release-management
-    workspace_dir="{{workspace}}"
-    if [ "$workspace_dir" = "." ]; then
-        branch_name="prod-release-{{app}}-${short_version}-z${patch}"
-        just clone-release-mgmt "$branch_name"
-        workspace_dir="acm-release-management"
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
     fi
+
+    # Ensure workspace exists and correct branch checked out
+    workspace_dir=$(just _ensure_release_mgmt_workspace prod {{app}} {{version}} $rc_arg)
 
     # Build paths
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
