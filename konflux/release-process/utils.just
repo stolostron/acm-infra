@@ -25,7 +25,12 @@ _validate type app rc: (_validate_app app)
         exit 1
     fi
     if [[ "{{type}}" == "stage" ]]; then
-        just _validate_rc {{rc}}
+        if [ -n "{{rc}}" ]; then
+            just _validate_rc {{rc}}
+        else
+            echo "Error: --rc parameter is required for stage releases" >&2
+            exit 1
+        fi
     fi
 
 # Private: parse version into major.minor.patch.short_version (space-separated)
@@ -372,3 +377,31 @@ _get_ocp_versions app version:
 
     # Convert ocp-X.Y format to X.Y and join with commas
     echo "$ocp_versions_yaml" | sed 's/ocp-//' | tr '\n' ',' | sed 's/,$//'
+
+# Private: ensure acm-release-management is cloned and correct branch checked out
+# Returns workspace directory path to stdout
+[arg("rc", long="rc")]
+_ensure_release_mgmt_workspace type app version rc="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # If custom workspace provided, use it as-is
+    if [ "{{workspace}}" != "." ]; then
+        echo "{{workspace}}"
+        exit 0
+    fi
+
+    # Parse version to build branch name
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
+
+    # Build branch name: {type}-release-app-shortversion-zpatch[-rcN]
+    branch_name="{{type}}-release-{{app}}-${short_version}-z${patch}"
+    if [ "{{type}}" = "stage" ] && [ -n "{{rc}}" ]; then
+        branch_name="${branch_name}-rc{{rc}}"
+    fi
+
+    # Clone and checkout branch (clone-release-mgmt handles all the logic)
+    just clone-release-mgmt "$branch_name" >&2
+
+    # Return workspace path
+    echo "acm-release-management"

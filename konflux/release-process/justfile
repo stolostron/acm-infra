@@ -106,11 +106,17 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
         exit 1
     fi
 
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
+    fi
+
     # Delegate to appropriate recipe
     if [ "{{type}}" = "stage" ]; then
-        just stage-release {{target}} {{app}} {{version}} {{snapshot}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}} --ocp_versions "{{ocp_versions}}"
+        just stage-release {{target}} {{app}} {{version}} {{snapshot}} $rc_arg --skip_confirm {{skip_confirm}} --dry_run {{dry_run}} --ocp_versions "{{ocp_versions}}"
     else
-        just prod-release {{target}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
+        just prod-release {{target}} {{app}} {{version}} $rc_arg --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
     fi
 
 # Query bugs from Jira for a specific application and version
@@ -1133,22 +1139,36 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true": (_val
         stage_file="${base_dir}/rc{{rc}}/{{app}}-${short_version}-{{target}}-stage-z${patch}-rc{{rc}}.yaml"
         prod_file="${base_dir}/{{app}}-${short_version}-{{target}}-prod-z${patch}.yaml"
 
-        # Check stage file exists
+        stage_snapshot_file="${base_dir}/rc{{rc}}/snapshot-{{app}}-${short_version}-{{target}}-stage-z${patch}-rc{{rc}}.yaml"
+        prod_snapshot_file="${base_dir}/snapshot-{{app}}-${short_version}-{{target}}-prod-z${patch}.yaml"
+
+        # Check stage files exist
         if [ ! -f "$stage_file" ]; then
             echo "❌ Stage {{target}} file not found: $stage_file" >&2
             echo "   Run 'just release {{target}} stage {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
             exit 1
         fi
 
+        if [ ! -f "$stage_snapshot_file" ]; then
+            echo "❌ Stage snapshot file not found: $stage_snapshot_file" >&2
+            echo "   Run 'just release {{target}} stage {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
+            exit 1
+        fi
+
         echo "📦 Promoting stage {{target}} to prod..." >&2
+
+        # Copy snapshot file
+        cp "$stage_snapshot_file" "$prod_snapshot_file"
+        echo "  ✓ Snapshot: $(basename "$prod_snapshot_file")" >&2
+
+        # Copy and transform release file
         echo "  Source: $(basename "$stage_file")" >&2
         echo "  Dest: $(basename "$prod_file")" >&2
 
-        # Copy file and update for prod
         yq eval '.metadata.name |= sub("stage", "prod") | .spec.releasePlan |= sub("stage", "prod")' \
             "$stage_file" > "$prod_file"
 
-        echo "  ✓ Saved: $prod_file" >&2
+        echo "  ✓ Release: $(basename "$prod_file")" >&2
         echo "" >&2
 
         # Read and apply to cluster
@@ -1170,11 +1190,17 @@ generate-snapshot target type app version rc="" skip_confirm="false" dry_run="tr
         exit 1
     fi
 
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
+    fi
+
     # Route to appropriate recipe
     if [ "{{target}}" = "bundle" ]; then
-        just update-bundle-snapshot {{type}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
+        just update-bundle-snapshot {{type}} {{app}} {{version}} $rc_arg --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
     else
-        just update-catalog-request {{type}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
+        just update-catalog-request {{type}} {{app}} {{version}} $rc_arg --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
     fi
 
 # Update operator bundle repository with latest snapshot
@@ -1188,11 +1214,14 @@ update-bundle-snapshot type app version rc="" skip_confirm="false" dry_run="true
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build paths to snapshot file (same logic as release recipe)
-    workspace_dir="{{workspace}}"
-    if [ "$workspace_dir" = "." ]; then
-        workspace_dir="acm-release-management"
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
     fi
+
+    # Ensure workspace exists and correct branch checked out
+    workspace_dir=$(just _ensure_release_mgmt_workspace {{type}} {{app}} {{version}} $rc_arg)
 
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
     release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
@@ -1371,11 +1400,14 @@ update-catalog-request type app version rc="" skip_confirm="false" dry_run="true
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build paths to bundle snapshot file
-    workspace_dir="{{workspace}}"
-    if [ "$workspace_dir" = "." ]; then
-        workspace_dir="acm-release-management"
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
     fi
+
+    # Ensure workspace exists and correct branch checked out
+    workspace_dir=$(just _ensure_release_mgmt_workspace {{type}} {{app}} {{version}} $rc_arg)
 
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
     release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
@@ -1392,7 +1424,7 @@ update-catalog-request type app version rc="" skip_confirm="false" dry_run="true
     # Verify bundle snapshot file exists
     if [ ! -f "$bundle_snapshot_file" ]; then
         echo "❌ Bundle snapshot file not found: $bundle_snapshot_file" >&2
-        echo "   Run 'just release bundle {{type}} {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
+        echo "   Run 'just release bundle {{type}} {{app}} {{version}} <snapshot> $rc_arg' first" >&2
         exit 1
     fi
 
