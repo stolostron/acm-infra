@@ -11,12 +11,12 @@ help:
     @echo "ACM/MCE Release Process - Available Recipes"
     @echo ""
     @echo "MAIN WORKFLOWS:"
-    @echo "  release <target> <type> <app> <version> <snapshot> [--rc <N>] [--dry_run false]"
+    @echo "  release <target> <type> <app> <version> [--snapshot <name>] [--rc <N>] [--dry_run false]"
     @echo "    Unified release workflow - delegates to stage-release or prod-release"
     @echo "    Targets: payload, bundle, catalog"
-    @echo "    Types: stage (requires --rc), prod (requires --rc)"
+    @echo "    Types: stage (requires --snapshot and --rc), prod (requires --rc)"
     @echo "    Apps: acm, mce"
-    @echo "    Example: just release payload stage acm 2.12.42 snapshot-xyz --rc 1"
+    @echo "    Example: just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1"
     @echo ""
     @echo "  stage-release <target> <app> <version> <snapshot> --rc <N> [--dry_run false]"
     @echo "    Stage release workflow - generates YAML, saves to disk, applies to cluster"
@@ -70,21 +70,38 @@ help:
     @echo "  clone-release-mgmt <branch-name>"
     @echo "  cleanup - Remove cloned repos"
     @echo ""
-    @echo "COMPLETE WORKFLOW EXAMPLE:"
+    @echo "COMPLETE WORKFLOW EXAMPLES:"
+    @echo ""
+    @echo "Stage Release Workflow:"
     @echo "  # 1. Create payload release"
-    @echo "  just release payload stage acm 2.12.42 snapshot-xyz --rc 1"
+    @echo "  just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1 --dry_run false"
     @echo ""
     @echo "  # 2. Update bundle snapshot (creates PR to operator bundle repo)"
     @echo "  just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
     @echo "  # 3. Create bundle release"
-    @echo "  just release bundle stage acm 2.12.42 snapshot-abc --rc 1"
+    @echo "  just release bundle stage acm 2.12.42 --snapshot snapshot-abc --rc 1 --dry_run false"
     @echo ""
     @echo "  # 4. Update catalog request (creates PR to catalog repo)"
     @echo "  just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
     @echo "  # 5. Create catalog release (OCP versions auto-detected)"
-    @echo "  just release catalog stage acm 2.12.42 snapshot-def --rc 1"
+    @echo "  just release catalog stage acm 2.12.42 --snapshot snapshot-def --rc 1 --dry_run false"
+    @echo ""
+    @echo "Prod Release Workflow:"
+    @echo "  Note: --rc specifies which stage RC to promote from (e.g. --rc 1 promotes from stage rc1)"
+    @echo ""
+    @echo "  # 1. Promote payload to prod (from stage rc1)"
+    @echo "  just release payload prod acm 2.12.42 --rc 1 --dry_run false"
+    @echo ""
+    @echo "  # 2. Promote bundle to prod (from stage rc1)"
+    @echo "  just release bundle prod acm 2.12.42 --rc 1 --dry_run false"
+    @echo ""
+    @echo "  # 3. Update catalog request for prod (creates PR to catalog repo)"
+    @echo "  just generate-snapshot catalog prod acm 2.12.42 --dry_run false"
+    @echo ""
+    @echo "  # 4. Create catalog release for prod (OCP versions auto-detected)"
+    @echo "  just release catalog prod acm 2.12.42 --snapshot snapshot-catalog-prod --dry_run false"
     @echo ""
     @echo "VARIABLES:"
     @echo "  debug=true        Enable debug output"
@@ -92,17 +109,24 @@ help:
     @echo ""
 
 # Unified release wrapper: delegates to stage-release or prod-release based on type
+[arg("snapshot", long="snapshot")]
 [arg("rc", long="rc")]
 [arg("skip_confirm", long="skip_confirm")]
 [arg("dry_run", long="dry_run")]
 [arg("ocp_versions", long="ocp_versions")]
-release target type app version snapshot rc="" skip_confirm="false" dry_run="true" ocp_versions="": (_validate_app app)
+release target type app version snapshot="" rc="" skip_confirm="false" dry_run="true" ocp_versions="": (_validate_app app)
     #!/usr/bin/env bash
     set -euo pipefail
 
     # Validate type
     if [[ "{{type}}" != "stage" && "{{type}}" != "prod" ]]; then
         echo "Error: type must be 'stage' or 'prod'" >&2
+        exit 1
+    fi
+
+    # Validate snapshot for stage releases
+    if [[ "{{type}}" == "stage" && -z "{{snapshot}}" ]]; then
+        echo "Error: --snapshot parameter is required for stage releases" >&2
         exit 1
     fi
 
