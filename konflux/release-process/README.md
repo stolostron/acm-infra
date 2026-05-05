@@ -39,8 +39,8 @@ just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
 # 6. Create catalog release (OCP versions auto-detected)
 just release catalog stage acm 2.12.42 --snapshot snapshot-def --rc 1 --dry_run false
 
-# 7. Monitor catalog releases
-just check-catalog-releases acm 2.12.42 1
+# 7. Monitor catalog releases (OCP versions auto-detected)
+just check-catalog-releases stage acm 2.12.42 --rc 1
 ```
 
 #### Prod Release Workflow
@@ -57,8 +57,17 @@ just release bundle prod acm 2.12.42 --rc 1 --dry_run false
 # 3. Update catalog request for prod (creates PR to catalog repo)
 just generate-snapshot catalog prod acm 2.12.42 --rc 1 --dry_run false
 
-# 4. Create catalog release for prod (OCP versions auto-detected)
-just release catalog prod acm 2.12.42 --rc 1 --dry_run false
+# 4. Create catalog release files for STAGE NOT PROD (OCP versions auto-detected)
+# Note that the RC has been chosen as 1-prod. This is to generate and save
+# the new catalog release files to promote to PROD. Dry run TRUE (default)
+# is fine, these do not need to be released to stage first
+just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
+
+# 5. Promote catalog to prod (from stage rc1)
+just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
+
+# 6. Monitor catalog releases (OCP versions auto-detected)
+just check-catalog-releases prod acm 2.12.42 --rc 1-prod
 ```
 
 ## Main Workflows
@@ -183,10 +192,10 @@ just apply-catalog acm 2.12.42 1 "4.14,4.15" --dry_run false
 just check-release stage-publish-acm-212-z42-rc1
 
 # Monitor catalog releases (auto-detects OCP versions)
-just check-catalog-releases acm 2.12.42 1
+just check-catalog-releases stage acm 2.12.42 --rc 1
 
 # Monitor catalog releases (manual OCP versions)
-just check-catalog-releases acm 2.12.42 1 "4.14-4.16"
+just check-catalog-releases stage acm 2.12.42 --rc 1 "4.14-4.16"
 
 # Monitor Konflux commit pipeline
 just check-commit abc123def456 acm-operator

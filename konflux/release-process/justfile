@@ -100,11 +100,14 @@ help:
     @echo "  # 3. Update catalog request for prod (creates PR to catalog repo)"
     @echo "  just generate-snapshot catalog prod acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
-    @echo "  # 4. Create catalog release for STAGE NOT PROD (OCP versions auto-detected)"
+    @echo "  # 4. Create catalog release files for STAGE NOT PROD (OCP versions auto-detected)"
     @echo "  # Note that the RC has been chosen as 1-prod. This is to generate and save"
     @echo "  # the new catalog release files to promote to PROD. Dry run TRUE (default)"
     @echo "  # is fine, these do not need to be released to stage first"
     @echo "  just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>"
+    @echo ""
+    @echo "  # 5. Promote catalog to prod (from stage rc1)"
+    @echo "  just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false"
     @echo ""
     @echo "VARIABLES:"
     @echo "  debug=true        Enable debug output"
@@ -498,7 +501,8 @@ apply-catalog type app version rc ocp_versions skip_confirm="false" dry_run="tru
     echo "✅ Applied $snapshot_count snapshot(s) and $release_count release(s)"
 
 # checking multiple catalog releases with progress notifications
-check-catalog-releases app version rc ocp_versions="":
+[arg("rc", long="rc")]
+check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
     #!/usr/bin/env bash
 
     # Parse version
@@ -513,11 +517,15 @@ check-catalog-releases app version rc ocp_versions="":
     # Parse OCP versions
     versions=($(just _parse_ocp_versions "$ocp_versions_resolved"))
 
+    rc_suffix=""
+    if [ -n "{{rc}}" ]; then
+        rc_suffix="-rc{{rc}}"
+    fi
     # Build release names
     declare -A RELEASES
     for ocp_ver in "${versions[@]}"; do
         ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
-        release_name="{{app}}-fbc-ocm-${ocp_file_ver}-stage-{{app}}-${short_version}-z${patch}-rc{{rc}}"
+        release_name="{{app}}-fbc-ocm-${ocp_file_ver}-{{type}}-{{app}}-${short_version}-z${patch}${rc_suffix}"
         RELEASES[$release_name]="pending"
     done
 
@@ -526,7 +534,7 @@ check-catalog-releases app version rc ocp_versions="":
     FIRST_RUN=true
     PREV_LINES=0
 
-    echo "Monitoring ${TOTAL} catalog releases for {{app}} {{version}} rc{{rc}}"
+    echo "Monitoring ${TOTAL} {{type}} catalog releases for {{app}} {{version}}"
     echo ""
 
     while true; do
