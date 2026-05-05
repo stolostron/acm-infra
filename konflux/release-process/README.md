@@ -55,10 +55,10 @@ just release payload prod acm 2.12.42 --rc 1 --dry_run false
 just release bundle prod acm 2.12.42 --rc 1 --dry_run false
 
 # 3. Update catalog request for prod (creates PR to catalog repo)
-just generate-snapshot catalog prod acm 2.12.42 --dry_run false
+just generate-snapshot catalog prod acm 2.12.42 --rc 1 --dry_run false
 
 # 4. Create catalog release for prod (OCP versions auto-detected)
-just release catalog prod acm 2.12.42 --snapshot snapshot-catalog-prod --dry_run false
+just release catalog prod acm 2.12.42 --rc 1 --dry_run false
 ```
 
 ## Main Workflows
