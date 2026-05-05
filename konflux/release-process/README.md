@@ -67,7 +67,7 @@ just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
 just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 
 # 6. Monitor catalog releases (OCP versions auto-detected)
-just check-catalog-releases prod acm 2.12.42 --rc 1-prod
+just check-catalog-releases prod acm 2.12.42
 ```
 
 ## Main Workflows
@@ -178,7 +178,7 @@ Generate and apply directly to cluster:
 ```bash
 just apply-payload stage acm 2.12.42 snapshot-xyz --rc 1 --dry_run false
 just apply-bundle prod mce 2.10.1 snapshot-abc --dry_run false
-just apply-catalog acm 2.12.42 1 "4.14,4.15" --dry_run false
+just apply-catalog stage acm 2.12.42 1 "4.14,4.15" --dry_run false
 ```
 
 ---
