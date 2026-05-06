@@ -16,11 +16,13 @@ Automation tools for creating and managing ACM and MCE releases using Konflux.
 
 Run `just help` to see all available recipes and examples.
 
-### Complete Release Workflow
+### Complete Release Workflows
+
+#### Stage Release Workflow
 
 ```bash
 # 1. Create payload release
-just release payload stage acm 2.12.42 snapshot-xyz --rc 1
+just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1 --dry_run false
 
 # 2. Update bundle snapshot (creates PR to operator bundle repo)
 just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false
@@ -29,16 +31,43 @@ just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false
 just get-snapshot-from-pr acm 3174
 
 # 4. Create bundle release  
-just release bundle stage acm 2.12.42 snapshot-bundle-acm-212-abc --rc 1
+just release bundle stage acm 2.12.42 --snapshot snapshot-bundle-acm-212-abc --rc 1 --dry_run false
 
 # 5. Update catalog request (creates PR to catalog repo)
 just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
 
 # 6. Create catalog release (OCP versions auto-detected)
-just release catalog stage acm 2.12.42 snapshot-def --rc 1
+just release catalog stage acm 2.12.42 --snapshot snapshot-def --rc 1 --dry_run false
 
-# 7. Monitor catalog releases
-just check-catalog-releases acm 2.12.42 1
+# 7. Monitor catalog releases (OCP versions auto-detected)
+just check-catalog-releases stage acm 2.12.42 --rc 1
+```
+
+#### Prod Release Workflow
+
+**Note:** `--rc` specifies which stage RC to promote from (e.g. `--rc 1` promotes from stage rc1)
+
+```bash
+# 1. Promote payload to prod (from stage rc1)
+just release payload prod acm 2.12.42 --rc 1 --dry_run false
+
+# 2. Promote bundle to prod (from stage rc1)
+just release bundle prod acm 2.12.42 --rc 1 --dry_run false
+
+# 3. Update catalog request for prod (creates PR to catalog repo)
+just generate-snapshot catalog prod acm 2.12.42 --rc 1 --dry_run false
+
+# 4. Create catalog release files for STAGE NOT PROD (OCP versions auto-detected)
+# Note that the RC has been chosen as 1-prod. This is to generate and save
+# the new catalog release files to promote to PROD. Dry run TRUE (default)
+# is fine, these do not need to be released to stage first
+just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
+
+# 5. Promote catalog to prod (from stage rc1)
+just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
+
+# 6. Monitor catalog releases (OCP versions auto-detected)
+just check-catalog-releases prod acm 2.12.42
 ```
 
 ## Main Workflows
@@ -49,7 +78,7 @@ Generate YAML, save to disk, and apply to cluster.
 
 **Syntax:**
 ```bash
-just release <target> <type> <app> <version> <snapshot> [--rc <N>] [--dry_run false]
+just release <target> <type> <app> <version> [--snapshot <name>] [--rc <N>] [--dry_run false]
 ```
 
 **Parameters:**
@@ -57,20 +86,20 @@ just release <target> <type> <app> <version> <snapshot> [--rc <N>] [--dry_run fa
 - `type`: "stage" or "prod"
 - `app`: "acm" or "mce"
 - `version`: Version string (e.g., "2.12.42")
-- `snapshot`: Snapshot name from cluster
-- `--rc <N>`: RC number (required for stage releases)
+- `--snapshot <name>`: Snapshot name from cluster (required for stage releases)
+- `--rc <N>`: RC number (required for stage releases, specifies which stage RC to promote from for prod)
 - `--dry_run false`: Apply live to cluster (default: true for dry-run)
 
 **Examples:**
 ```bash
-# Stage payload (dry-run)
-just release payload stage acm 2.12.42 snapshot-xyz --rc 1
+# Stage payload
+just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1 --dry_run false
 
-# Prod bundle (live)
-just release bundle prod mce 2.10.1 snapshot-abc --dry_run false
+# Prod bundle (promotes from stage rc1)
+just release bundle prod mce 2.10.1 --rc 1 --dry_run false
 
 # Catalog release with auto-detected OCP versions
-just release catalog stage acm 2.12.42 snapshot-def --rc 1
+just release catalog stage acm 2.12.42 --snapshot snapshot-def --rc 1 --dry_run false
 ```
 
 **What it does:**
@@ -149,7 +178,7 @@ Generate and apply directly to cluster:
 ```bash
 just apply-payload stage acm 2.12.42 snapshot-xyz --rc 1 --dry_run false
 just apply-bundle prod mce 2.10.1 snapshot-abc --dry_run false
-just apply-catalog acm 2.12.42 1 "4.14,4.15" --dry_run false
+just apply-catalog stage acm 2.12.42 1 "4.14,4.15" --dry_run false
 ```
 
 ---
@@ -163,10 +192,10 @@ just apply-catalog acm 2.12.42 1 "4.14,4.15" --dry_run false
 just check-release stage-publish-acm-212-z42-rc1
 
 # Monitor catalog releases (auto-detects OCP versions)
-just check-catalog-releases acm 2.12.42 1
+just check-catalog-releases stage acm 2.12.42 --rc 1
 
 # Monitor catalog releases (manual OCP versions)
-just check-catalog-releases acm 2.12.42 1 "4.14-4.16"
+just check-catalog-releases stage acm 2.12.42 --rc 1 "4.14-4.16"
 
 # Monitor Konflux commit pipeline
 just check-commit abc123def456 acm-operator

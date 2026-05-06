@@ -11,12 +11,12 @@ help:
     @echo "ACM/MCE Release Process - Available Recipes"
     @echo ""
     @echo "MAIN WORKFLOWS:"
-    @echo "  release <target> <type> <app> <version> <snapshot> [--rc <N>] [--dry_run false]"
+    @echo "  release <target> <type> <app> <version> [--snapshot <name>] [--rc <N>] [--dry_run false]"
     @echo "    Unified release workflow - delegates to stage-release or prod-release"
     @echo "    Targets: payload, bundle, catalog"
-    @echo "    Types: stage (requires --rc), prod (requires --rc)"
+    @echo "    Types: stage (requires --snapshot and --rc), prod (requires --rc)"
     @echo "    Apps: acm, mce"
-    @echo "    Example: just release payload stage acm 2.12.42 snapshot-xyz --rc 1"
+    @echo "    Example: just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1"
     @echo ""
     @echo "  stage-release <target> <app> <version> <snapshot> --rc <N> [--dry_run false]"
     @echo "    Stage release workflow - generates YAML, saves to disk, applies to cluster"
@@ -48,13 +48,13 @@ help:
     @echo "APPLY TO CLUSTER:"
     @echo "  apply-payload <type> <app> <version> <snapshot> [--rc <N>] [--dry_run false]"
     @echo "  apply-bundle <type> <app> <version> <snapshot> [--rc <N>] [--dry_run false]"
-    @echo "  apply-catalog <app> <version> <rc> <ocp_versions> [--dry_run false]"
+    @echo "  apply-catalog <type> <app> <version> <rc> <ocp_versions> [--dry_run false]"
     @echo ""
     @echo "MONITORING (Beta / Work in Progress):"
     @echo "  check-release <release-name>"
     @echo "    Monitor release status with notifications"
     @echo ""
-    @echo "  check-catalog-releases <app> <version> <rc> [ocp_versions]"
+    @echo "  check-catalog-releases <type> <app> <version> [--rc <N>] [ocp_versions]"
     @echo "    Monitor multiple catalog releases with progress"
     @echo ""
     @echo "  check-commit <commit-sha> [app_name] [namespace]"
@@ -70,21 +70,44 @@ help:
     @echo "  clone-release-mgmt <branch-name>"
     @echo "  cleanup - Remove cloned repos"
     @echo ""
-    @echo "COMPLETE WORKFLOW EXAMPLE:"
+    @echo "COMPLETE WORKFLOW EXAMPLES:"
+    @echo ""
+    @echo "Stage Release Workflow:"
     @echo "  # 1. Create payload release"
-    @echo "  just release payload stage acm 2.12.42 snapshot-xyz --rc 1"
+    @echo "  just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1 --dry_run false"
     @echo ""
     @echo "  # 2. Update bundle snapshot (creates PR to operator bundle repo)"
     @echo "  just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
     @echo "  # 3. Create bundle release"
-    @echo "  just release bundle stage acm 2.12.42 snapshot-abc --rc 1"
+    @echo "  just release bundle stage acm 2.12.42 --snapshot snapshot-abc --rc 1 --dry_run false"
     @echo ""
     @echo "  # 4. Update catalog request (creates PR to catalog repo)"
     @echo "  just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
     @echo "  # 5. Create catalog release (OCP versions auto-detected)"
-    @echo "  just release catalog stage acm 2.12.42 snapshot-def --rc 1"
+    @echo "  just release catalog stage acm 2.12.42 --snapshot snapshot-def --rc 1 --dry_run false"
+    @echo ""
+    @echo "Prod Release Workflow:"
+    @echo "  Note: --rc specifies which stage RC to promote from (e.g. --rc 1 promotes from stage rc1)"
+    @echo ""
+    @echo "  # 1. Promote payload to prod (from stage rc1)"
+    @echo "  just release payload prod acm 2.12.42 --rc 1 --dry_run false"
+    @echo ""
+    @echo "  # 2. Promote bundle to prod (from stage rc1)"
+    @echo "  just release bundle prod acm 2.12.42 --rc 1 --dry_run false"
+    @echo ""
+    @echo "  # 3. Update catalog request for prod (creates PR to catalog repo)"
+    @echo "  just generate-snapshot catalog prod acm 2.12.42 --rc 1 --dry_run false"
+    @echo ""
+    @echo "  # 4. Create catalog release files for STAGE NOT PROD (OCP versions auto-detected)"
+    @echo "  # Note that the RC has been chosen as 1-prod. This is to generate and save"
+    @echo "  # the new catalog release files to promote to PROD. Dry run TRUE (default)"
+    @echo "  # is fine, these do not need to be released to stage first"
+    @echo "  just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>"
+    @echo ""
+    @echo "  # 5. Promote catalog to prod (from stage rc1)"
+    @echo "  just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false"
     @echo ""
     @echo "VARIABLES:"
     @echo "  debug=true        Enable debug output"
@@ -92,11 +115,12 @@ help:
     @echo ""
 
 # Unified release wrapper: delegates to stage-release or prod-release based on type
+[arg("snapshot", long="snapshot")]
 [arg("rc", long="rc")]
 [arg("skip_confirm", long="skip_confirm")]
 [arg("dry_run", long="dry_run")]
 [arg("ocp_versions", long="ocp_versions")]
-release target type app version snapshot rc="" skip_confirm="false" dry_run="true" ocp_versions="": (_validate_app app)
+release target type app version snapshot="" rc="" skip_confirm="false" dry_run="true" ocp_versions="": (_validate_app app)
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -106,11 +130,23 @@ release target type app version snapshot rc="" skip_confirm="false" dry_run="tru
         exit 1
     fi
 
+    # Validate snapshot for stage releases
+    if [[ "{{type}}" == "stage" && -z "{{snapshot}}" ]]; then
+        echo "Error: --snapshot parameter is required for stage releases" >&2
+        exit 1
+    fi
+
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
+    fi
+
     # Delegate to appropriate recipe
     if [ "{{type}}" = "stage" ]; then
-        just stage-release {{target}} {{app}} {{version}} {{snapshot}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}} --ocp_versions "{{ocp_versions}}"
+        just stage-release {{target}} {{app}} {{version}} {{snapshot}} $rc_arg --skip_confirm {{skip_confirm}} --dry_run {{dry_run}} --ocp_versions "{{ocp_versions}}"
     else
-        just prod-release {{target}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
+        just prod-release {{target}} {{app}} {{version}} $rc_arg --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
     fi
 
 # Query bugs from Jira for a specific application and version
@@ -127,7 +163,7 @@ query-bugs app version bundle="false": _check_yq
     fi
 
     # Build the JQL query for bugs
-    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC_Cases_Counter\" > 0)${bundle_clause}"
+    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and statuscategory in (done) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC_Cases_Counter\" > 0)${bundle_clause}"
 
     # Query Jira for bugs
     jira_output=$(jira issue list -q "$jql_query" --raw 2>&1) || {
@@ -465,7 +501,8 @@ apply-catalog type app version rc ocp_versions skip_confirm="false" dry_run="tru
     echo "✅ Applied $snapshot_count snapshot(s) and $release_count release(s)"
 
 # checking multiple catalog releases with progress notifications
-check-catalog-releases app version rc ocp_versions="":
+[arg("rc", long="rc")]
+check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
     #!/usr/bin/env bash
 
     # Parse version
@@ -480,11 +517,15 @@ check-catalog-releases app version rc ocp_versions="":
     # Parse OCP versions
     versions=($(just _parse_ocp_versions "$ocp_versions_resolved"))
 
+    rc_suffix=""
+    if [ -n "{{rc}}" ]; then
+        rc_suffix="-rc{{rc}}"
+    fi
     # Build release names
     declare -A RELEASES
     for ocp_ver in "${versions[@]}"; do
         ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
-        release_name="{{app}}-fbc-ocm-${ocp_file_ver}-stage-{{app}}-${short_version}-z${patch}-rc{{rc}}"
+        release_name="{{app}}-fbc-ocm-${ocp_file_ver}-{{type}}-{{app}}-${short_version}-z${patch}${rc_suffix}"
         RELEASES[$release_name]="pending"
     done
 
@@ -493,7 +534,7 @@ check-catalog-releases app version rc ocp_versions="":
     FIRST_RUN=true
     PREV_LINES=0
 
-    echo "Monitoring ${TOTAL} catalog releases for {{app}} {{version}} rc{{rc}}"
+    echo "Monitoring ${TOTAL} {{type}} catalog releases for {{app}} {{version}}"
     echo ""
 
     while true; do
@@ -982,14 +1023,14 @@ stage-release target app version snapshot rc="" skip_confirm="false" dry_run="tr
         echo "  ✓ Detected OCP versions: ${ocp_versions_resolved}" >&2
     fi
 
-    # If workspace is default, clone the release management repo
-    workspace_dir="{{workspace}}"
-    if [ "$workspace_dir" = "." ]; then
-        # Clone release management repo and create branch
-        branch_name="stage-release-{{app}}-${short_version}-z${patch}-rc{{rc}}"
-        just clone-release-mgmt "$branch_name"
-        workspace_dir="acm-release-management"
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
     fi
+
+    # Ensure workspace exists and correct branch checked out
+    workspace_dir=$(just _ensure_release_mgmt_workspace stage {{app}} {{version}} $rc_arg)
 
     # Build directory path (stage always goes in rc subdirectory)
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
@@ -1057,13 +1098,14 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true": (_val
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Find or clone acm-release-management
-    workspace_dir="{{workspace}}"
-    if [ "$workspace_dir" = "." ]; then
-        branch_name="prod-release-{{app}}-${short_version}-z${patch}"
-        just clone-release-mgmt "$branch_name"
-        workspace_dir="acm-release-management"
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
     fi
+
+    # Ensure workspace exists and correct branch checked out
+    workspace_dir=$(just _ensure_release_mgmt_workspace prod {{app}} {{version}} $rc_arg)
 
     # Build paths
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
@@ -1133,22 +1175,36 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true": (_val
         stage_file="${base_dir}/rc{{rc}}/{{app}}-${short_version}-{{target}}-stage-z${patch}-rc{{rc}}.yaml"
         prod_file="${base_dir}/{{app}}-${short_version}-{{target}}-prod-z${patch}.yaml"
 
-        # Check stage file exists
+        stage_snapshot_file="${base_dir}/rc{{rc}}/snapshot-{{app}}-${short_version}-{{target}}-stage-z${patch}-rc{{rc}}.yaml"
+        prod_snapshot_file="${base_dir}/snapshot-{{app}}-${short_version}-{{target}}-prod-z${patch}.yaml"
+
+        # Check stage files exist
         if [ ! -f "$stage_file" ]; then
             echo "❌ Stage {{target}} file not found: $stage_file" >&2
             echo "   Run 'just release {{target}} stage {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
             exit 1
         fi
 
+        if [ ! -f "$stage_snapshot_file" ]; then
+            echo "❌ Stage snapshot file not found: $stage_snapshot_file" >&2
+            echo "   Run 'just release {{target}} stage {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
+            exit 1
+        fi
+
         echo "📦 Promoting stage {{target}} to prod..." >&2
+
+        # Copy snapshot file
+        cp "$stage_snapshot_file" "$prod_snapshot_file"
+        echo "  ✓ Snapshot: $(basename "$prod_snapshot_file")" >&2
+
+        # Copy and transform release file
         echo "  Source: $(basename "$stage_file")" >&2
         echo "  Dest: $(basename "$prod_file")" >&2
 
-        # Copy file and update for prod
         yq eval '.metadata.name |= sub("stage", "prod") | .spec.releasePlan |= sub("stage", "prod")' \
             "$stage_file" > "$prod_file"
 
-        echo "  ✓ Saved: $prod_file" >&2
+        echo "  ✓ Release: $(basename "$prod_file")" >&2
         echo "" >&2
 
         # Read and apply to cluster
@@ -1170,11 +1226,17 @@ generate-snapshot target type app version rc="" skip_confirm="false" dry_run="tr
         exit 1
     fi
 
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
+    fi
+
     # Route to appropriate recipe
     if [ "{{target}}" = "bundle" ]; then
-        just update-bundle-snapshot {{type}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
+        just update-bundle-snapshot {{type}} {{app}} {{version}} $rc_arg --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
     else
-        just update-catalog-request {{type}} {{app}} {{version}} --rc {{rc}} --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
+        just update-catalog-request {{type}} {{app}} {{version}} $rc_arg --skip_confirm {{skip_confirm}} --dry_run {{dry_run}}
     fi
 
 # Update operator bundle repository with latest snapshot
@@ -1188,11 +1250,14 @@ update-bundle-snapshot type app version rc="" skip_confirm="false" dry_run="true
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build paths to snapshot file (same logic as release recipe)
-    workspace_dir="{{workspace}}"
-    if [ "$workspace_dir" = "." ]; then
-        workspace_dir="acm-release-management"
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
     fi
+
+    # Ensure workspace exists and correct branch checked out
+    workspace_dir=$(just _ensure_release_mgmt_workspace {{type}} {{app}} {{version}} $rc_arg)
 
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
     release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
@@ -1371,11 +1436,14 @@ update-catalog-request type app version rc="" skip_confirm="false" dry_run="true
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build paths to bundle snapshot file
-    workspace_dir="{{workspace}}"
-    if [ "$workspace_dir" = "." ]; then
-        workspace_dir="acm-release-management"
+    # Build rc argument if provided
+    rc_arg=""
+    if [ -n "{{rc}}" ]; then
+        rc_arg="--rc {{rc}}"
     fi
+
+    # Ensure workspace exists and correct branch checked out
+    workspace_dir=$(just _ensure_release_mgmt_workspace {{type}} {{app}} {{version}} $rc_arg)
 
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
     release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
@@ -1392,7 +1460,7 @@ update-catalog-request type app version rc="" skip_confirm="false" dry_run="true
     # Verify bundle snapshot file exists
     if [ ! -f "$bundle_snapshot_file" ]; then
         echo "❌ Bundle snapshot file not found: $bundle_snapshot_file" >&2
-        echo "   Run 'just release bundle {{type}} {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
+        echo "   Run 'just release bundle {{type}} {{app}} {{version}} <snapshot> $rc_arg' first" >&2
         exit 1
     fi
 
