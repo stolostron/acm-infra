@@ -531,7 +531,7 @@ check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
     TOTAL=${#RELEASES[@]}
     COMPLETED=0
     FIRST_RUN=true
-    PREV_LINES=0
+    NUM_LINES=0
 
     echo "Monitoring ${TOTAL} {{type}} catalog releases for {{app}} {{version}}"
     echo ""
@@ -541,7 +541,7 @@ check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
             FIRST_RUN=false
         else
             # Move cursor up and clear previous output
-            for ((i=0; i<PREV_LINES; i++)); do
+            for ((i=0; i<NUM_LINES; i++)); do
                 echo -ne "\033[1A\033[K"
             done
         fi
@@ -592,7 +592,6 @@ check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
 
         # Countdown to next check
         echo ""; ((NUM_LINES++))
-        PREV_LINES=$LINES
         for ((countdown=30; countdown>0; countdown--)); do
             echo -ne "\033[1A\033[K"
             echo "Next check in ${countdown}s..."
