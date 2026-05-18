@@ -65,7 +65,7 @@ help:
     @echo "    Targets: bundle-acm, bundle-mce, catalog"
     @echo ""
     @echo "UTILITIES:"
-    @echo "  retrieve-fbc-catalog-images <app> <version> <rc> [ocp_versions]"
+    @echo "  retrieve-fbc-catalog-images <app> <version> --rc <N> [--ocp_versions <versions>]"
     @echo "  get-snapshot-from-pr <app> <pr-number>"
     @echo "  verify-catalog-snapshot <app> <version> <snapshot>"
     @echo "  get-catalog-snapshot <type> <app> <commit-sha>"
@@ -404,6 +404,8 @@ apply-bundle type app version snapshot rc="" skip_confirm="false" dry_run="true"
     just _apply "$bundle" {{skip_confirm}} {{dry_run}}
 
 # Retrieve FBC catalog images from releases
+[arg("rc", long="rc")]
+[arg("ocp_versions", long="ocp_versions")]
 retrieve-fbc-catalog-images app version rc ocp_versions="": (_validate_app app) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
