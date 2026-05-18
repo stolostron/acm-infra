@@ -60,12 +60,15 @@ help:
     @echo "  check-commit <commit-sha> [app_name] [namespace]"
     @echo "    Monitor Konflux commit pipeline runs"
     @echo ""
-    @echo "  check-pr <pr-number> [repo] [workflow]"
+    @echo "  check-pr <target> <pr-number>"
     @echo "    Monitor GitHub action and PR merge status"
+    @echo "    Targets: bundle-acm, bundle-mce, catalog"
     @echo ""
     @echo "UTILITIES:"
     @echo "  retrieve-fbc-catalog-images <app> <version> <rc> [ocp_versions]"
     @echo "  get-snapshot-from-pr <app> <pr-number>"
+    @echo "  verify-catalog-snapshot <app> <version> <snapshot>"
+    @echo "  get-catalog-snapshot <type> <app> <commit-sha>"
     @echo "  get-advisory <release-name>"
     @echo "  clone-release-mgmt <branch-name>"
     @echo "  cleanup - Remove cloned repos"
@@ -202,7 +205,7 @@ query-cves app version: _check_github_access
     gh api repos/stolostron/acm-config/contents/product/component-registry.yaml?ref=main --jq '.content' | base64 -d > "$registry_file"
 
     # Build the JQL query
-    jql_query="project = \"Red Hat Advanced Cluster Management\" and issuetype in (Weakness, Vulnerability) and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog)"
+    jql_query="project = \"Red Hat Advanced Cluster Management\" and issuetype in (Weakness, Vulnerability) and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and \"Embargo Status\" != \"True\""
 
     # Query Jira for CVEs
     jira_output=$(jira issue list -q "$jql_query" --raw 2>&1) || {
@@ -530,27 +533,21 @@ check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
 
     TOTAL=${#RELEASES[@]}
     COMPLETED=0
-    FIRST_RUN=true
-    NUM_LINES=0
+    _N=0
+    p() { echo "$@"; ((_N++)); }
 
     echo "Monitoring ${TOTAL} {{type}} catalog releases for {{app}} {{version}}"
     echo ""
 
     while true; do
-        if [[ "$FIRST_RUN" == "true" ]]; then
-            FIRST_RUN=false
-        else
-            # Move cursor up and clear previous output
-            for ((i=0; i<NUM_LINES; i++)); do
-                echo -ne "\033[1A\033[K"
-            done
+        if [ $_N -gt 0 ]; then
+            echo -ne "\033[${_N}A\033[J"
         fi
-
-        NUM_LINES=0
+        _N=0
 
         for release_name in "${!RELEASES[@]}"; do
             if [[ "${RELEASES[$release_name]}" == "notified" ]]; then
-                echo "  ✅ $release_name: Complete"; ((NUM_LINES++))
+                p "  ✅ $release_name: Complete"
                 continue
             fi
 
@@ -559,15 +556,13 @@ check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
             PROGRESSING=$(echo "$YAML" | yq '.status.conditions[] | select(.type == "Progressing") | .status')
 
             if [[ "$STATUS" == "True" ]]; then
-                # Mark as notified and increment
                 RELEASES[$release_name]="notified"
                 ((COMPLETED++))
 
-                # Send notification
                 notify-send "Catalog Release Complete" "$release_name completed ($COMPLETED/$TOTAL)"
                 which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
 
-                echo "  ✅ $release_name: Complete"; ((NUM_LINES++))
+                p "  ✅ $release_name: Complete"
             elif [[ "$STATUS" == "False" && "$PROGRESSING" == "Failed" ]]; then
                 RELEASES[$release_name]="notified"
                 ((COMPLETED++))
@@ -575,23 +570,21 @@ check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
                 notify-send "Catalog Release Failed" "$release_name failed ($COMPLETED/$TOTAL)"
                 which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
 
-                echo "  ❌ $release_name: Failed"; ((NUM_LINES++))
+                p "  ❌ $release_name: Failed"
             else
-                echo "  ⏳ $release_name: Released=$STATUS, Progressing=$PROGRESSING"; ((NUM_LINES++))
+                p "  ⏳ $release_name: Released=$STATUS, Progressing=$PROGRESSING"
             fi
         done
 
-        echo ""; ((NUM_LINES++))
-        echo "$(date): Progress: $COMPLETED/$TOTAL complete"; ((NUM_LINES++))
-
+        p ""
+        p "$(date): Progress: $COMPLETED/$TOTAL complete"
         if [[ $COMPLETED -eq $TOTAL ]]; then
-            echo ""; ((NUM_LINES++))
-            echo "All releases finished!"; ((NUM_LINES++))
+            echo ""
+            echo "All releases finished!"
             exit 0
         fi
 
-        # Countdown to next check
-        echo ""; ((NUM_LINES++))
+        p ""
         for ((countdown=30; countdown>0; countdown--)); do
             echo -ne "\033[1A\033[K"
             echo "Next check in ${countdown}s..."
@@ -603,23 +596,24 @@ check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
 check-release release:
     #!/usr/bin/env bash
 
-    NUM_LINES=0
     NAMESPACE="crt-redhat-acm-tenant"
+    _N=0
+    p() { echo "$@"; ((_N++)); }
+    pe() { echo -e "$@"; ((_N++)); }
 
     echo "Monitoring release {{release}}"
 
     while true; do
-        # Move cursor up and clear previous output
-        for ((i=0; i<NUM_LINES; i++)); do
-            echo -ne "\033[1A\033[K"
-        done
-
-        NUM_LINES=0
+        # Move cursor up _N lines and clear everything below
+        if [ $_N -gt 0 ]; then
+            echo -ne "\033[${_N}A\033[J"
+        fi
+        _N=0
 
         # Fetch release
         YAML=$(oc get release "{{release}}" -n "$NAMESPACE" -oyaml 2>/dev/null)
         if [[ -z "$YAML" ]]; then
-            echo "❌ Failed to fetch release - connection issue?";
+            echo "❌ Failed to fetch release - connection issue?"
             exit 1
         fi
 
@@ -630,14 +624,14 @@ check-release release:
         # Extract ManagedPipelineProcessed for detailed failure info
         MANAGED_FAILURE=$(echo "$YAML" | yq '.status.conditions[] | select(.type == "ManagedPipelineProcessed" and .status == "False") | .message')
 
-        echo "  Status: $STATUS"; ((NUM_LINES++))
-        echo "  Reason: $REASON"; ((NUM_LINES++))
+        p "  Status: $STATUS"
+        p "  Reason: $REASON"
         if [[ -n "$MANAGED_FAILURE" ]]; then
-            echo "  Failure: $MANAGED_FAILURE"; ((NUM_LINES++))
+            p "  Failure: $MANAGED_FAILURE"
         elif [[ -n "$MESSAGE" ]]; then
-            echo "  Message: $MESSAGE"; ((NUM_LINES++))
+            p "  Message: $MESSAGE"
         fi
-        echo ""; ((NUM_LINES++))
+        p ""
 
         # Extract PipelineRun (format: namespace/name)
         PIPELINE_RUN=$(echo "$YAML" | yq '.status.managedProcessing.pipelineRun')
@@ -650,15 +644,14 @@ check-release release:
             # Build console URL
             CONSOLE_URL="https://konflux-ui.apps.stone-prd-rh01.pg1f.p1.openshiftapps.com/ns/${PR_NAMESPACE}/pipelinerun/${PR_NAME}"
 
-            # Print with clickable hyperlink (OSC 8 escape sequence)
-            echo -e "PipelineRun: \033]8;;${CONSOLE_URL}\033\\${PR_NAME}\033]8;;\033\\"; ((NUM_LINES++))
-            echo ""; ((NUM_LINES++))
+            pe "PipelineRun: \033]8;;${CONSOLE_URL}\033\\${PR_NAME}\033]8;;\033\\"
+            p ""
 
             # Get PipelineRun to extract all defined tasks
             PR_YAML=$(oc get pipelinerun "$PR_NAME" -n "$PR_NAMESPACE" -o yaml 2>/dev/null)
 
             if [[ -z "$PR_YAML" ]]; then
-                echo "⚠️  PipelineRun garbage collected - task details unavailable"; ((NUM_LINES++))
+                p "⚠️  PipelineRun garbage collected - task details unavailable"
             else
                 # Get all task names from pipeline spec (regular + finally tasks)
                 ALL_TASKS=$(echo "$PR_YAML" | yq '.status.pipelineSpec.tasks[]?.name, .status.pipelineSpec.finally[]?.name' 2>/dev/null | grep -v '^$')
@@ -667,7 +660,6 @@ check-release release:
                 declare -A TASKRUN_STATUS
                 while IFS='|' read -r NAME TR_STATUS TR_REASON; do
                     [[ -z "$NAME" ]] && continue
-                    # Extract task name (remove pipelinerun prefix)
                     TASK_NAME=$(echo "$NAME" | sed "s/^${PR_NAME}-//")
                     TASKRUN_STATUS["$TASK_NAME"]="$TR_STATUS|$TR_REASON"
                 done < <(oc get taskrun -n "$PR_NAMESPACE" -l tekton.dev/pipelineRun="$PR_NAME" -o json 2>/dev/null | \
@@ -680,64 +672,59 @@ check-release release:
                 PENDING=0
                 NOT_STARTED=0
 
-                # Iterate through all defined tasks
                 while read -r TASK_NAME; do
                     [[ -z "$TASK_NAME" ]] && continue
                     ((TOTAL++))
-                    ((NUM_LINES++))
 
                     if [[ -n "${TASKRUN_STATUS[$TASK_NAME]}" ]]; then
-                        # TaskRun exists - show status
                         IFS='|' read -r TR_STATUS TR_REASON <<< "${TASKRUN_STATUS[$TASK_NAME]}"
 
                         case "$TR_STATUS" in
                             "True")
                                 ((SUCCEEDED++))
-                                echo "  ✅ $TASK_NAME";
+                                p "  ✅ $TASK_NAME"
                                 ;;
                             "False")
                                 ((FAILED++))
-                                echo "  ❌ $TASK_NAME ($TR_REASON)";
+                                p "  ❌ $TASK_NAME ($TR_REASON)"
                                 ;;
                             "Unknown")
                                 if [[ "$TR_REASON" == "Running" ]]; then
                                     ((RUNNING++))
-                                    echo "  ⏳ $TASK_NAME (Running)";
+                                    p "  ⏳ $TASK_NAME (Running)"
                                 else
                                     ((PENDING++))
-                                    echo "  ⏸  $TASK_NAME (Pending)";
+                                    p "  ⏸  $TASK_NAME (Pending)"
                                 fi
                                 ;;
                         esac
                     else
-                        # TaskRun doesn't exist yet
                         ((NOT_STARTED++))
-                        echo "  ⏸  $TASK_NAME (Not started)";
+                        p "  ⏸  $TASK_NAME (Not started)"
                     fi
                 done <<< "$ALL_TASKS"
 
-                echo ""; ((NUM_LINES++))
-                echo "Tasks: $TOTAL total, $SUCCEEDED succeeded, $RUNNING running, $PENDING pending, $NOT_STARTED not started, $FAILED failed"; ((NUM_LINES++))
+                p ""
+                p "Tasks: $TOTAL total, $SUCCEEDED succeeded, $RUNNING running, $PENDING pending, $NOT_STARTED not started, $FAILED failed"
             fi
         fi
 
         # Check for completion after showing task details
         if [[ "$REASON" == "Succeeded" ]]; then
-            echo "";
-            echo "✅ Release completed successfully!";
+            echo ""
+            echo "✅ Release completed successfully!"
             notify-send "Release Ready" "{{release}} is released!"
             which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
             exit 0
         fi
 
         if [[ "$REASON" == "Failed" ]]; then
-            echo "";
-            echo "❌ Release failed!";
+            echo ""
+            echo "❌ Release failed!"
             if [[ -n "$MANAGED_FAILURE" ]]; then
-                echo "   $MANAGED_FAILURE";
+                echo "   $MANAGED_FAILURE"
             fi
 
-            # Extract failed task name for notification
             FAILED_TASK=""
             if [[ "$MANAGED_FAILURE" =~ task\ ([a-z0-9-]+)\ failed ]]; then
                 FAILED_TASK="${BASH_REMATCH[1]}"
@@ -749,7 +736,7 @@ check-release release:
             exit 1
         fi
 
-        echo ""; ((NUM_LINES++))
+        p ""
         for ((countdown=30; countdown>0; countdown--)); do
             echo -ne "\033[1A\033[K"
             echo "Next check in ${countdown}s..."
@@ -772,19 +759,18 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
         HEADER="Monitoring commit {{commit_sha}}"
     fi
 
-    FIRST_RUN=true
     MAX_RUNS=0
-    NUM_LINES=0
+    _N=0
+    p() { echo "$@"; ((_N++)); }
 
     while true; do
-        # Move cursor up and clear previous output
-        for ((i=0; i<LINES; i++)); do
-            echo -ne "\033[1A\033[K"
-        done
+        if [ $_N -gt 0 ]; then
+            echo -ne "\033[${_N}A\033[J"
+        fi
+        _N=0
 
-        NUM_LINES=0
-        echo "$HEADER"; ((NUM_LINES++))
-        echo ""; ((NUM_LINES++))
+        p "$HEADER"
+        p ""
 
         # Fetch build pipelines
         BUILD_DATA=$(oc get pipelineruns -n "{{namespace}}" -l "$BUILD_SELECTOR" -o json 2>/dev/null | \
@@ -797,10 +783,10 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
         # Combine and check if empty
         if [[ -z "$BUILD_DATA" && -z "$TEST_DATA" ]]; then
             if [[ $MAX_RUNS -eq 0 ]]; then
-                echo "$(date): No PipelineRuns found"; ((NUM_LINES++))
+                echo "$(date): No PipelineRuns found"
                 exit 1
             else
-                echo "$(date): All $MAX_RUNS PipelineRuns completed and garbage collected"; ((NUM_LINES++))
+                echo "$(date): All $MAX_RUNS PipelineRuns completed and garbage collected"
                 notify-send "Commit Builds Complete" "All builds finished and cleaned up"
                 which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
                 exit 0
@@ -818,13 +804,11 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
         while IFS='|' read -r NAME STATUS REASON; do
             [[ -z "$NAME" ]] && continue
 
-            # Extract component name and stage/prod
             if [[ "$NAME" =~ ^(.+)-(stage|prod)-on-push- ]]; then
                 COMPONENT="${BASH_REMATCH[1]}"
                 TYPE="${BASH_REMATCH[2]}"
                 COMPONENTS["$COMPONENT"]=1
 
-                # Status icon
                 case "$STATUS" in
                     "True") ICON="✅" ;;
                     "False") ICON="❌" ;;
@@ -862,18 +846,16 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
             fi
         done <<< "$TEST_DATA"
 
-        # Print table header (double-line)
-        printf "%-40s  Prod       Stage      Prod       Stage\n" "Component"; ((NUM_LINES++))
-        printf "%-40s  Build      Build      EC         EC\n" ""; ((NUM_LINES++))
-        printf "%s\n" "$(printf '%.0s-' {1..85})"; ((NUM_LINES++))
+        # Print table header
+        p "$(printf "%-40s  Prod       Stage      Prod       Stage" "Component")"
+        p "$(printf "%-40s  Build      Build      EC         EC" "")"
+        p "$(printf '%.0s-' {1..85})"
 
-        # Print rows
         TOTAL=0
         SUCCESS=0
         FAILED=0
         RUNNING=0
 
-        # Sort components and print
         SORTED_ROWS=""
         for COMPONENT in "${!COMPONENTS[@]}"; do
             PROD_B="${PROD_BUILD[$COMPONENT]:---}"
@@ -881,11 +863,9 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
             PROD_E="${PROD_EC[$COMPONENT]:---}"
             STAGE_E="${STAGE_EC[$COMPONENT]:---}"
 
-            # Fixed spacing for emoji alignment (emojis render as double-width)
             ROW=$(printf "%-40s  %s         %s          %s         %s" "$COMPONENT" "$PROD_B" "$STAGE_B" "$PROD_E" "$STAGE_E")
             SORTED_ROWS="${SORTED_ROWS}${ROW}\n"
 
-            # Count statuses
             for ICON in "$PROD_B" "$STAGE_B" "$PROD_E" "$STAGE_E"; do
                 [[ "$ICON" == "--" ]] && continue
                 ((TOTAL++))
@@ -897,32 +877,26 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
             done
         done
 
-        # Print sorted rows and count lines
-        SORTED_OUTPUT=$(echo -e "$SORTED_ROWS" | sort)
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue
-            echo "$line"
-            ((NUM_LINES++))
-        done <<< "$SORTED_OUTPUT"
+            p "$line"
+        done <<< "$(echo -e "$SORTED_ROWS" | sort)"
 
-        # Track max
         if [[ $TOTAL -gt $MAX_RUNS ]]; then
             MAX_RUNS=$TOTAL
         fi
 
-        echo ""; ((NUM_LINES++))
-        echo "$(date): Total=$TOTAL/$MAX_RUNS Success=$SUCCESS Failed=$FAILED Running=$RUNNING"; ((NUM_LINES++))
-
+        p ""
+        p "$(date): Total=$TOTAL/$MAX_RUNS Success=$SUCCESS Failed=$FAILED Running=$RUNNING"
         if [[ $RUNNING -eq 0 && $TOTAL -gt 0 ]]; then
-            echo ""; ((NUM_LINES++))
-            echo "✅ All builds complete!"; ((NUM_LINES++))
+            echo ""
+            echo "✅ All builds complete!"
             notify-send "Commit Builds Complete" "All $TOTAL builds finished (Success: $SUCCESS, Failed: $FAILED)"
             which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
             exit 0
         fi
 
-        # Countdown
-        echo ""; ((NUM_LINES++))
+        p ""
         for ((countdown=30; countdown>0; countdown--)); do
             echo -ne "\033[1A\033[K"
             echo "Next check in ${countdown}s..."
@@ -931,11 +905,31 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
     done
 
 # checking GitHub action and PR merge status with notifications
-check-pr pr_number repo="stolostron/acm-mce-operator-catalogs" workflow="Gen Catalog Content When Requested":
+check-pr target pr_number:
     #!/usr/bin/env bash
 
+    case "{{target}}" in
+        bundle-acm)
+            REPO="stolostron/acm-operator-bundle"
+            WORKFLOW="Gen Bundle Contents When Triggered"
+            ;;
+        bundle-mce)
+            REPO="stolostron/mce-operator-bundle"
+            WORKFLOW="Gen Bundle Contents When Triggered"
+            ;;
+        catalog)
+            REPO="stolostron/acm-mce-operator-catalogs"
+            WORKFLOW="Gen Catalog Content When Requested"
+            ;;
+        *)
+            echo "Unknown target: {{target}}"
+            echo "Valid targets: bundle-acm, bundle-mce, catalog"
+            exit 1
+            ;;
+    esac
+
     # Get PR branch name
-    PR_DATA=$(gh pr view "{{pr_number}}" --repo "{{repo}}" --json headRefName,title 2>/dev/null)
+    PR_DATA=$(gh pr view "{{pr_number}}" --repo "$REPO" --json headRefName,title 2>/dev/null)
     BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
     PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
@@ -945,15 +939,15 @@ check-pr pr_number repo="stolostron/acm-mce-operator-catalogs" workflow="Gen Cat
     fi
 
     echo "Monitoring GitHub action and PR..."
-    echo "  Repository: {{repo}}"
+    echo "  Repository: $REPO"
     echo "  PR: #{{pr_number}} - $PR_TITLE"
     echo "  Branch: $BRANCH"
-    echo "  Workflow: {{workflow}}"
+    echo "  Workflow: $WORKFLOW"
     echo ""
 
     # Wait for workflow to complete
     while true; do
-        RUN_DATA=$(gh run list --repo "{{repo}}" --branch "$BRANCH" --workflow "{{workflow}}" --json conclusion,status,workflowName,databaseId --limit 5 2>/dev/null)
+        RUN_DATA=$(gh run list --repo "$REPO" --branch "$BRANCH" --workflow "$WORKFLOW" --json conclusion,status,workflowName,databaseId --limit 5 2>/dev/null)
         RUN_INFO=$(echo "$RUN_DATA" | jq -r '.[0] | {status: .status, conclusion: .conclusion, id: .databaseId} | @json' 2>/dev/null)
 
         if [[ -z "$RUN_INFO" || "$RUN_INFO" == "null" ]]; then
@@ -987,7 +981,7 @@ check-pr pr_number repo="stolostron/acm-mce-operator-catalogs" workflow="Gen Cat
 
     # Wait for PR merge
     while true; do
-        PR_STATE=$(gh pr view "{{pr_number}}" --repo "{{repo}}" --json state,mergedAt,mergeCommit 2>/dev/null)
+        PR_STATE=$(gh pr view "{{pr_number}}" --repo "$REPO" --json state,mergedAt,mergeCommit 2>/dev/null)
 
         if [[ -z "$PR_STATE" ]]; then
             echo "$(date): Failed to get PR status"
@@ -1184,6 +1178,113 @@ get-snapshot-from-pr app pr_number: (_validate_app app) _check_github_access _ch
     echo "" >&2
 
     # Output snapshot name to stdout
+    echo "$snapshot_name"
+
+# Verify catalog snapshot contains the expected app version for relevant OCP versions
+verify-catalog-snapshot app version snapshot: (_validate_app app) _check_oc_cluster _check_github_access
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    namespace="crt-redhat-acm-tenant"
+
+    if [ "{{app}}" = "acm" ]; then
+        package="advanced-cluster-management"
+    else
+        package="multicluster-engine"
+    fi
+
+    read -r major minor patch short_version <<< $(just _parse_version {{version}})
+    expected="v${major}.${minor}.${patch}"
+
+    # Get relevant OCP versions for this app+version
+    ocp_csv=$(just _get_ocp_versions {{app}} {{version}})
+    IFS=',' read -ra ocp_versions <<< "$ocp_csv"
+
+    echo "🔍 Verifying catalog snapshot {{snapshot}}"
+    echo "   Package: $package"
+    echo "   Expected version: $expected"
+    echo "   OCP versions: ${ocp_versions[*]}"
+    echo ""
+
+    # Build lookup of component name -> image from snapshot
+    declare -A comp_images
+    while IFS='|' read -r name image; do
+        [[ -z "$name" ]] && continue
+        comp_images["$name"]="$image"
+    done <<< "$(oc get snapshot "{{snapshot}}" -n "$namespace" -o json | \
+        jq -r '.spec.components[] | "\(.name)|\(.containerImage)"')"
+
+    PASS=0
+    FAIL=0
+    TOTAL=0
+
+    for ocp_ver in "${ocp_versions[@]}"; do
+        ocp_dash=$(echo "$ocp_ver" | tr '.' '-')
+        comp_name="{{app}}-fbc-ocm-${ocp_dash}-stage"
+        image="${comp_images[$comp_name]:-}"
+
+        if [[ -z "$image" ]]; then
+            echo "  ⚠️  OCP $ocp_ver: component $comp_name not in snapshot"
+            FAIL=$((FAIL + 1))
+            TOTAL=$((TOTAL + 1))
+            continue
+        fi
+
+        TOTAL=$((TOTAL + 1))
+
+        highest=$(opm render "$image" -oyaml 2>/dev/null | \
+            yq ".name | select(test(\"^${package}\\.v\"))" | \
+            grep -v '^---$' | \
+            awk -F. '{minor=$2"."$3; patch=$4+0; if (!(minor in max) || patch > max[minor]) max[minor]=patch} END {for (m in max) print m"."max[m]}' | \
+            sort -V)
+
+        if echo "$highest" | grep -q "^${expected}$"; then
+            echo "  ✅ OCP $ocp_ver: $expected found"
+            PASS=$((PASS + 1))
+        else
+            echo "  ❌ OCP $ocp_ver: $expected NOT found"
+            echo "     Versions present: $(echo "$highest" | tr '\n' ' ')"
+            FAIL=$((FAIL + 1))
+        fi
+    done
+
+    echo ""
+    echo "Results: $PASS/$TOTAL passed"
+
+    if [ $FAIL -gt 0 ]; then
+        exit 1
+    fi
+
+# Find the catalog snapshot where all components share the given git revision
+get-catalog-snapshot type app commit_sha: (_validate_app app) _check_oc_cluster
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    application="{{app}}-operator-catalog-{{type}}"
+    namespace="crt-redhat-acm-tenant"
+
+    echo "🔍 Finding catalog snapshot for $application with commit {{commit_sha}}..." >&2
+
+    snapshot_name=$(oc get snapshots -n "$namespace" \
+        -l "appstudio.openshift.io/application=$application" \
+        -o json | jq -r --arg app "$application" --arg sha "{{commit_sha}}" '
+        [.items[] |
+        select(.metadata.name | startswith($app + "-")) |
+        [.spec.components[].source.git.revision // "none"] as $revs |
+        select(($revs | unique) == [$sha])] |
+        sort_by(.metadata.creationTimestamp) | last | .metadata.name // empty
+    ')
+
+    if [ -z "$snapshot_name" ]; then
+        echo "❌ No converged snapshot found" >&2
+        echo "   All components must have git revision {{commit_sha}}" >&2
+        exit 1
+    fi
+
+    component_count=$(oc get snapshot "$snapshot_name" -n "$namespace" -o json | jq '.spec.components | length')
+    echo "  Snapshot: $snapshot_name ($component_count components)" >&2
+    echo "" >&2
+
     echo "$snapshot_name"
 
 # Clone release management repo and create a branch
