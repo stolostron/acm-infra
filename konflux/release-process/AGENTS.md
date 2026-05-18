@@ -1,0 +1,173 @@
+## Project Context
+- justfile and utils.just are the main code body of this repo
+- run `just help` to view the usage of this justfile
+- This is ACM/MCE Release Process automation for creating Konflux releases
+
+## Prerequisites
+- `oc` CLI logged into Konflux cluster (stone-prd-rh01.pg1f.p1.openshiftapps.com, project: crt-redhat-acm-tenant)
+- `gh` CLI configured with GitHub access
+- `jira` CLI configured with Red Hat Jira access
+- `yq` (mikefarah version) and `jq` installed
+- Git user.name and user.email configured
+- VPN connection to Red Hat network (for GitLab access)
+
+## Stage Release Workflow
+
+Complete workflow to release to STAGE:
+
+```bash
+# 1. Create payload release
+just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1 --dry_run false
+
+# 1a. Track payload release progress (optional)
+just check-release <PAYLOAD_RELEASE_NAME>
+
+# 2. Update bundle snapshot (creates PR to operator bundle repo, rc required for stage)
+just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false
+
+# 3. Wait for PR merge, get snapshot from PR
+just get-snapshot-from-pr acm <PR_NUMBER>
+
+# 4. Create bundle release  
+just release bundle stage acm 2.12.42 --snapshot <BUNDLE_SNAPSHOT> --rc 1 --dry_run false
+
+# 4a. Track bundle release progress (optional)
+just check-release <BUNDLE_RELEASE_NAME>
+
+# 5. Update catalog request (creates PR to catalog repo, rc required for stage)
+just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
+
+# 6. Create catalog release (OCP versions auto-detected)
+just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dry_run false
+
+# 7. Monitor catalog releases (OCP versions auto-detected)
+just check-catalog-releases stage acm 2.12.42 --rc 1
+```
+
+## Prod Release Workflow
+
+Complete workflow to promote STAGE to PROD:
+
+**Important**: `--rc` specifies which stage RC to promote FROM (e.g. `--rc 1` promotes from stage rc1)
+
+```bash
+# 1. Promote payload to prod (from stage rc1)
+just release payload prod acm 2.12.42 --rc 1 --dry_run false
+
+# 1a. Track payload release progress (optional)
+just check-release <PAYLOAD_RELEASE_NAME>
+
+# 2. Promote bundle to prod (from stage rc1)
+just release bundle prod acm 2.12.42 --rc 1 --dry_run false
+
+# 2a. Track bundle release progress (optional)
+just check-release <BUNDLE_RELEASE_NAME>
+
+# 3. Update catalog request for prod (creates PR to catalog repo, rc not needed for prod)
+just generate-snapshot catalog prod acm 2.12.42 --dry_run false
+
+# 4. Create catalog release files for STAGE NOT PROD
+# Note: RC is 1-prod to generate catalog files. Dry run TRUE is fine.
+just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
+
+# 5. Promote catalog to prod (from stage rc1-prod)
+just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
+
+# 6. Monitor catalog releases
+just check-catalog-releases prod acm 2.12.42
+```
+
+## Key Command Syntax
+
+Main release command:
+```bash
+just release <target> <type> <app> <version> [--snapshot <name>] [--rc <N>] [--dry_run false]
+```
+
+- **target**: payload, bundle, or catalog
+- **type**: stage or prod
+- **app**: acm or mce
+- **version**: e.g., "2.12.42"
+- **--snapshot**: Snapshot name (required for stage)
+- **--rc**: RC number (required for all; specifies source RC for prod promotions)
+- **--dry_run false**: Apply live (default is dry-run)
+
+Generate snapshot/PR:
+```bash
+just generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run false]
+```
+- **target**: bundle (updates operator bundle repo) or catalog (updates catalog request)
+- **--rc**: Required for stage, not used for prod
+
+## Key Command Syntax
+
+Main release command:
+```bash
+just release <target> <type> <app> <version> [--snapshot <name>] [--rc <N>] [--dry_run false]
+```
+
+- **target**: payload, bundle, or catalog
+- **type**: stage or prod
+- **app**: acm or mce
+- **version**: e.g., "2.12.42"
+- **--snapshot**: Snapshot name (required for stage)
+- **--rc**: RC number (required for all; specifies source RC for prod promotions)
+- **--dry_run false**: Apply live (default is dry-run)
+
+Generate snapshot/PR:
+```bash
+just generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run false]
+```
+- **target**: bundle (updates operator bundle repo) or catalog (updates catalog request)
+- **--rc**: Required for stage, not used for prod
+
+Monitoring:
+```bash
+just check-release <release-name>
+just check-catalog-releases <type> <app> <version> [--rc <N>] [ocp_versions]
+just check-commit <commit-sha> [app_name] [namespace]
+just check-pr <target> <pr-number>   # targets: bundle-acm, bundle-mce, catalog
+```
+
+Utilities:
+```bash
+just retrieve-fbc-catalog-images <app> <version> --rc <N> [--ocp_versions <versions>]
+just get-snapshot-from-pr <app> <pr-number>
+just verify-catalog-snapshot <app> <version> <snapshot>
+just get-catalog-snapshot <type> <app> <commit-sha>
+just get-advisory <release-name>
+just clone-release-mgmt <branch-name>
+just cleanup
+```
+
+## Common "Gotchas"
+- This justfile is using `just 1.46.0`, which has new ways of handeling recipe arguments. No longer do you specify arguments with arg=value, you must instead add the [arg()] descriptor and then pass the argument with `--arg value`. Global variables are still specified with `arg=value` *before* the recipe call (example: `just debug=true <recipe> --<arg> <value>`)
+- **All apply operations default to dry-run** - Must pass `--dry_run false` to apply live
+- For **catalog** releases, OCP versions are auto-detected from catalog config
+- **Y-stream releases** (X.Y.0) skip bug/CVE queries and use RHEA type
+- **Z-stream releases** (X.Y.Z where Z > 0) query bugs/CVEs and use RHSA/RHBA/RHEA based on content
+- `release payload` must run before `generate-snapshot bundle`
+- `release bundle` must run before `generate-snapshot catalog`
+- Catalog OCP versions can be manually overridden with `--ocp_versions "4.14,4.15"` or `--ocp_versions "4.14-4.17"`
+
+## Directory Structure
+
+Files saved to acm-release-management repo:
+- **Prod**: `ACM/ACM-2.12.42/` (no rc subdirs)
+- **Stage**: `ACM/ACM-2.12.42/rc1/` (rc subdirs)
+- **Catalogs**: `ACM/ACM-2.12.42/rc1/catalogs/snapshots/` and `.../releases/`
+
+## Release and PR Check Processes
+
+**WARNING: These processes are WIP and may not work reliably.**
+
+These processes can run for extended periods (sometimes over an hour). If a process runs longer than 20 minutes, something likely went wrong and requires manual inspection.
+
+**Important:** When running these tasks, always include a 20 minute timeout to prevent hanging indefinitely.
+
+Track release progress:
+```bash
+just check-release <RELEASE_NAME>
+```
+
+Available after `release payload` and `release bundle` commands (not for catalog releases). Use `check-catalog-releases` for catalog monitoring instead.
