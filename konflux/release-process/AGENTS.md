@@ -99,7 +99,7 @@ just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 # 9. Monitor catalog releases
 just check-catalog-releases prod acm 2.12.42
 
-# 9. Create GitLab MR for release files
+# 10. Create GitLab MR for release files
 just create-mr acm 2.12.42
 ```
 
