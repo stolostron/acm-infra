@@ -50,6 +50,9 @@ just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dr
 
 # 11. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases stage acm 2.12.42 --rc 1
+
+# 12. Create GitLab MR for release files
+just create-mr acm 2.12.42
 ```
 
 ## Prod Release Workflow
@@ -83,6 +86,9 @@ just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 
 # 8. Monitor catalog releases
 just check-catalog-releases prod acm 2.12.42
+
+# 9. Create GitLab MR for release files
+just create-mr acm 2.12.42
 ```
 
 ## Key Command Syntax
@@ -122,9 +128,16 @@ just get-snapshot-from-pr <app> <pr-number>
 just verify-catalog-snapshot <type> <app> <version> <snapshot>
 just get-catalog-snapshot <type> <app> <commit-sha>
 just get-advisory <release-name>
+just create-mr <app> <version>
 just clone-release-mgmt <branch-name>
 just cleanup
 ```
+
+## Branch Model
+
+All recipes for a given app+version share a single GitLab branch: `release-{app}-{version}` (e.g., `release-acm-2.12.42`). Stage RCs, prod promotions — everything goes on the same branch.
+
+Files are committed and pushed incrementally after each `stage-release` and `prod-release` step, so progress is backed up to GitLab piecewise. At the end of the workflow, `create-mr` opens a GitLab MR to merge the branch into main.
 
 ## Common "Gotchas"
 - This justfile is using `just 1.46.0`, which has new ways of handeling recipe arguments. No longer do you specify arguments with arg=value, you must instead add the [arg()] descriptor and then pass the argument with `--arg value`. Global variables are still specified with `arg=value` *before* the recipe call (example: `just debug=true <recipe> --<arg> <value>`)

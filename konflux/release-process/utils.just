@@ -379,9 +379,10 @@ _get_ocp_versions app version:
     echo "$ocp_versions_yaml" | sed 's/ocp-//' | tr '\n' ',' | sed 's/,$//'
 
 # Private: ensure acm-release-management is cloned and correct branch checked out
+# Uses a single shared branch per app+version: release-{app}-{version}
+# All stage RCs and prod files go on the same branch.
 # Returns workspace directory path to stdout
-[arg("rc", long="rc")]
-_ensure_release_mgmt_workspace type app version rc="":
+_ensure_release_mgmt_workspace type app version:
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -391,17 +392,50 @@ _ensure_release_mgmt_workspace type app version rc="":
         exit 0
     fi
 
-    # Parse version to build branch name
-    read -r major minor patch short_version <<< $(just _parse_version {{version}})
-
-    # Build branch name: {type}-release-app-shortversion-zpatch[-rcN]
-    branch_name="{{type}}-release-{{app}}-${short_version}-z${patch}"
-    if [ "{{type}}" = "stage" ] && [ -n "{{rc}}" ]; then
-        branch_name="${branch_name}-rc{{rc}}"
-    fi
+    # Single branch per app+version (shared across stage/prod/all RCs)
+    branch_name="release-{{app}}-{{version}}"
 
     # Clone and checkout branch (clone-release-mgmt handles all the logic)
     just clone-release-mgmt "$branch_name" >&2
 
     # Return workspace path
     echo "acm-release-management"
+
+# Private: commit and push release management files after each step
+# Call after saving files to the release-management repo for incremental backup
+_push_release_mgmt_files commit_msg:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    repo_dir="acm-release-management"
+
+    # Skip if custom workspace
+    if [ "{{workspace}}" != "." ]; then
+        echo "ℹ️  Custom workspace — skipping auto-push" >&2
+        exit 0
+    fi
+
+    if [ ! -d "$repo_dir" ]; then
+        echo "⚠️  Release management repo not found, skipping push" >&2
+        exit 0
+    fi
+
+    cd "$repo_dir"
+
+    # Stage all changes
+    git add -A
+
+    # Check if there are changes to commit
+    if git diff --cached --quiet; then
+        echo "ℹ️  No new changes to push" >&2
+        exit 0
+    fi
+
+    # Build commit message with sign-off
+    full_msg="{{commit_msg}}"
+    full_msg="${full_msg}"$'\n\n'"Signed-off-by: $(git config user.name) <$(git config user.email)>"
+
+    git commit -m "$full_msg"
+    git push origin HEAD
+
+    echo "✅ Pushed release files to remote" >&2
