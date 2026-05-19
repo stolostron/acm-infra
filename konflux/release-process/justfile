@@ -67,7 +67,7 @@ help:
     @echo "UTILITIES:"
     @echo "  retrieve-fbc-catalog-images <app> <version> --rc <N> [--ocp_versions <versions>]"
     @echo "  get-snapshot-from-pr <app> <pr-number>"
-    @echo "  verify-catalog-snapshot <app> <version> <snapshot>"
+    @echo "  verify-catalog-snapshot <type> <app> <version> <snapshot>"
     @echo "  get-catalog-snapshot <type> <app> <commit-sha>"
     @echo "  get-advisory <release-name>"
     @echo "  clone-release-mgmt <branch-name>"
@@ -79,17 +79,37 @@ help:
     @echo "  # 1. Create payload release"
     @echo "  just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1 --dry_run false"
     @echo ""
-    @echo "  # 2. Update bundle snapshot (creates PR to operator bundle repo)"
+    @echo "  # 2. Monitor payload release"
+    @echo "  just check-release <PAYLOAD_RELEASE_NAME>"
+    @echo ""
+    @echo "  # 3. Update bundle snapshot (creates PR to operator bundle repo)"
     @echo "  just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
-    @echo "  # 3. Create bundle release"
-    @echo "  just release bundle stage acm 2.12.42 --snapshot snapshot-abc --rc 1 --dry_run false"
+    @echo "  # 4. Monitor PR merge and wait for pipeline builds"
+    @echo "  just check-pr bundle-acm <PR_NUMBER>"
+    @echo "  just check-commit <MERGE_COMMIT_SHA>"
     @echo ""
-    @echo "  # 4. Update catalog request (creates PR to catalog repo)"
+    @echo "  # 5. Get bundle snapshot from merged PR"
+    @echo "  just get-snapshot-from-pr acm <PR_NUMBER>"
+    @echo ""
+    @echo "  # 6. Create bundle release"
+    @echo "  just release bundle stage acm 2.12.42 --snapshot <BUNDLE_SNAPSHOT> --rc 1 --dry_run false"
+    @echo ""
+    @echo "  # 7. Monitor bundle release"
+    @echo "  just check-release <BUNDLE_RELEASE_NAME>"
+    @echo ""
+    @echo "  # 8. Update catalog request (creates PR to catalog repo)"
     @echo "  just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
-    @echo "  # 5. Create catalog release (OCP versions auto-detected)"
+    @echo "  # 9. Monitor catalog PR merge and wait for pipeline builds"
+    @echo "  just check-pr catalog <PR_NUMBER>"
+    @echo "  just check-commit <MERGE_COMMIT_SHA>"
+    @echo ""
+    @echo "  # 10. Create catalog release (OCP versions auto-detected)"
     @echo "  just release catalog stage acm 2.12.42 --snapshot snapshot-def --rc 1 --dry_run false"
+    @echo ""
+    @echo "  # 11. Monitor catalog releases"
+    @echo "  just check-catalog-releases stage acm 2.12.42 --rc 1"
     @echo ""
     @echo "Prod Release Workflow:"
     @echo "  Note: --rc specifies which stage RC to promote from (e.g. --rc 1 promotes from stage rc1)"
@@ -97,20 +117,29 @@ help:
     @echo "  # 1. Promote payload to prod (from stage rc1)"
     @echo "  just release payload prod acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
-    @echo "  # 2. Promote bundle to prod (from stage rc1)"
+    @echo "  # 2. Monitor payload release"
+    @echo "  just check-release <PAYLOAD_RELEASE_NAME>"
+    @echo ""
+    @echo "  # 3. Promote bundle to prod (from stage rc1)"
     @echo "  just release bundle prod acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
-    @echo "  # 3. Update catalog request for prod (creates PR to catalog repo)"
+    @echo "  # 4. Monitor bundle release"
+    @echo "  just check-release <BUNDLE_RELEASE_NAME>"
+    @echo ""
+    @echo "  # 5. Update catalog request for prod (creates PR to catalog repo)"
     @echo "  just generate-snapshot catalog prod acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
-    @echo "  # 4. Create catalog release files for STAGE NOT PROD (OCP versions auto-detected)"
+    @echo "  # 6. Create catalog release files for STAGE NOT PROD (OCP versions auto-detected)"
     @echo "  # Note that the RC has been chosen as 1-prod. This is to generate and save"
     @echo "  # the new catalog release files to promote to PROD. Dry run TRUE (default)"
     @echo "  # is fine, these do not need to be released to stage first"
     @echo "  just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>"
     @echo ""
-    @echo "  # 5. Promote catalog to prod (from stage rc1)"
+    @echo "  # 7. Promote catalog to prod (from stage rc1)"
     @echo "  just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false"
+    @echo ""
+    @echo "  # 8. Monitor catalog releases"
+    @echo "  just check-catalog-releases prod acm 2.12.42"
     @echo ""
     @echo "VARIABLES:"
     @echo "  debug=true        Enable debug output"
@@ -372,8 +401,14 @@ generate-bundle type app version snapshot rc="": (_validate type app rc)
 
     [[ "{{debug}}" == "true" ]] && echo "[generate-bundle] Generating bundle YAML..." >&2
 
-    # Build base YAML (bundle is always RHBA)
-    output=$(just debug={{debug}} _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "RHBA")
+    # Y stream releases (X.Y.0) use RHEA, Z stream releases use RHBA
+    if [ "$patch" = "0" ]; then
+        release_type="RHEA"
+    else
+        release_type="RHBA"
+    fi
+
+    output=$(just debug={{debug}} _build_base {{app}} {{snapshot}} "$release_name" "$release_plan" "$release_type")
 
     # Y stream releases (X.Y.0) don't include bugs
     if [ "$patch" != "0" ]; then
@@ -1002,15 +1037,9 @@ check-pr target pr_number:
             echo "✅ PR #{{pr_number}} merged!"
             if [[ -n "$MERGE_SHA" ]]; then
                 echo "   Merge commit: $MERGE_SHA"
-                echo ""
-                echo "Monitoring pipeline runs for commit $MERGE_SHA..."
-                echo ""
-                notify-send "PR Merged" "PR #{{pr_number}} merged! Monitoring builds..."
-                just check-commit "$MERGE_SHA"
-            else
-                notify-send "PR Merged" "PR #{{pr_number}} has been merged!"
-                which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
             fi
+            notify-send "PR Merged" "PR #{{pr_number}} has been merged!"
+            which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
             exit 0
         fi
 
@@ -1183,7 +1212,7 @@ get-snapshot-from-pr app pr_number: (_validate_app app) _check_github_access _ch
     echo "$snapshot_name"
 
 # Verify catalog snapshot contains the expected app version for relevant OCP versions
-verify-catalog-snapshot app version snapshot: (_validate_app app) _check_oc_cluster _check_github_access
+verify-catalog-snapshot type app version snapshot: (_validate_app app) _check_oc_cluster _check_github_access
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -1222,7 +1251,7 @@ verify-catalog-snapshot app version snapshot: (_validate_app app) _check_oc_clus
 
     for ocp_ver in "${ocp_versions[@]}"; do
         ocp_dash=$(echo "$ocp_ver" | tr '.' '-')
-        comp_name="{{app}}-fbc-ocm-${ocp_dash}-stage"
+        comp_name="{{app}}-fbc-ocm-${ocp_dash}-{{type}}"
         image="${comp_images[$comp_name]:-}"
 
         if [[ -z "$image" ]]; then
