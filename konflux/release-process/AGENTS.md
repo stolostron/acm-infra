@@ -19,28 +19,36 @@ Complete workflow to release to STAGE:
 # 1. Create payload release
 just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1 --dry_run false
 
-# 1a. Track payload release progress (optional)
+# 2. Monitor payload release
 just check-release <PAYLOAD_RELEASE_NAME>
 
-# 2. Update bundle snapshot (creates PR to operator bundle repo, rc required for stage)
+# 3. Update bundle snapshot (creates PR to operator bundle repo, rc required for stage)
 just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false
 
-# 3. Wait for PR merge, get snapshot from PR
+# 4. Monitor PR merge and wait for pipeline builds
+just check-pr bundle-acm <PR_NUMBER>
+just check-commit <MERGE_COMMIT_SHA>
+
+# 5. Get bundle snapshot from merged PR
 just get-snapshot-from-pr acm <PR_NUMBER>
 
-# 4. Create bundle release  
+# 6. Create bundle release  
 just release bundle stage acm 2.12.42 --snapshot <BUNDLE_SNAPSHOT> --rc 1 --dry_run false
 
-# 4a. Track bundle release progress (optional)
+# 7. Monitor bundle release
 just check-release <BUNDLE_RELEASE_NAME>
 
-# 5. Update catalog request (creates PR to catalog repo, rc required for stage)
+# 8. Update catalog request (creates PR to catalog repo, rc required for stage)
 just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
 
-# 6. Create catalog release (OCP versions auto-detected)
+# 9. Monitor catalog PR merge and wait for pipeline builds
+just check-pr catalog <PR_NUMBER>
+just check-commit <MERGE_COMMIT_SHA>
+
+# 10. Create catalog release (OCP versions auto-detected)
 just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dry_run false
 
-# 7. Monitor catalog releases (OCP versions auto-detected)
+# 11. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases stage acm 2.12.42 --rc 1
 ```
 
@@ -54,50 +62,28 @@ Complete workflow to promote STAGE to PROD:
 # 1. Promote payload to prod (from stage rc1)
 just release payload prod acm 2.12.42 --rc 1 --dry_run false
 
-# 1a. Track payload release progress (optional)
+# 2. Monitor payload release
 just check-release <PAYLOAD_RELEASE_NAME>
 
-# 2. Promote bundle to prod (from stage rc1)
+# 3. Promote bundle to prod (from stage rc1)
 just release bundle prod acm 2.12.42 --rc 1 --dry_run false
 
-# 2a. Track bundle release progress (optional)
+# 4. Monitor bundle release
 just check-release <BUNDLE_RELEASE_NAME>
 
-# 3. Update catalog request for prod (creates PR to catalog repo, rc not needed for prod)
+# 5. Update catalog request for prod (creates PR to catalog repo, rc not needed for prod)
 just generate-snapshot catalog prod acm 2.12.42 --dry_run false
 
-# 4. Create catalog release files for STAGE NOT PROD
+# 6. Create catalog release files for STAGE NOT PROD
 # Note: RC is 1-prod to generate catalog files. Dry run TRUE is fine.
 just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
 
-# 5. Promote catalog to prod (from stage rc1-prod)
+# 7. Promote catalog to prod (from stage rc1-prod)
 just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 
-# 6. Monitor catalog releases
+# 8. Monitor catalog releases
 just check-catalog-releases prod acm 2.12.42
 ```
-
-## Key Command Syntax
-
-Main release command:
-```bash
-just release <target> <type> <app> <version> [--snapshot <name>] [--rc <N>] [--dry_run false]
-```
-
-- **target**: payload, bundle, or catalog
-- **type**: stage or prod
-- **app**: acm or mce
-- **version**: e.g., "2.12.42"
-- **--snapshot**: Snapshot name (required for stage)
-- **--rc**: RC number (required for all; specifies source RC for prod promotions)
-- **--dry_run false**: Apply live (default is dry-run)
-
-Generate snapshot/PR:
-```bash
-just generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run false]
-```
-- **target**: bundle (updates operator bundle repo) or catalog (updates catalog request)
-- **--rc**: Required for stage, not used for prod
 
 ## Key Command Syntax
 
@@ -133,7 +119,7 @@ Utilities:
 ```bash
 just retrieve-fbc-catalog-images <app> <version> --rc <N> [--ocp_versions <versions>]
 just get-snapshot-from-pr <app> <pr-number>
-just verify-catalog-snapshot <app> <version> <snapshot>
+just verify-catalog-snapshot <type> <app> <version> <snapshot>
 just get-catalog-snapshot <type> <app> <commit-sha>
 just get-advisory <release-name>
 just clone-release-mgmt <branch-name>

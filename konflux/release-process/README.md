@@ -24,22 +24,36 @@ Run `just help` to see all available recipes and examples.
 # 1. Create payload release
 just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1 --dry_run false
 
-# 2. Update bundle snapshot (creates PR to operator bundle repo)
+# 2. Monitor payload release
+just check-release <PAYLOAD_RELEASE_NAME>
+
+# 3. Update bundle snapshot (creates PR to operator bundle repo)
 just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false
 
-# 3. Wait for PR merge, get snapshot from PR
-just get-snapshot-from-pr acm 3174
+# 4. Monitor PR merge and wait for pipeline builds
+just check-pr bundle-acm <PR_NUMBER>
+just check-commit <MERGE_COMMIT_SHA>
 
-# 4. Create bundle release  
-just release bundle stage acm 2.12.42 --snapshot snapshot-bundle-acm-212-abc --rc 1 --dry_run false
+# 5. Get bundle snapshot from merged PR
+just get-snapshot-from-pr acm <PR_NUMBER>
 
-# 5. Update catalog request (creates PR to catalog repo)
+# 6. Create bundle release  
+just release bundle stage acm 2.12.42 --snapshot <BUNDLE_SNAPSHOT> --rc 1 --dry_run false
+
+# 7. Monitor bundle release
+just check-release <BUNDLE_RELEASE_NAME>
+
+# 8. Update catalog request (creates PR to catalog repo)
 just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
 
-# 6. Create catalog release (OCP versions auto-detected)
+# 9. Monitor catalog PR merge and wait for pipeline builds
+just check-pr catalog <PR_NUMBER>
+just check-commit <MERGE_COMMIT_SHA>
+
+# 10. Create catalog release (OCP versions auto-detected)
 just release catalog stage acm 2.12.42 --snapshot snapshot-def --rc 1 --dry_run false
 
-# 7. Monitor catalog releases (OCP versions auto-detected)
+# 11. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases stage acm 2.12.42 --rc 1
 ```
 
@@ -51,22 +65,28 @@ just check-catalog-releases stage acm 2.12.42 --rc 1
 # 1. Promote payload to prod (from stage rc1)
 just release payload prod acm 2.12.42 --rc 1 --dry_run false
 
-# 2. Promote bundle to prod (from stage rc1)
+# 2. Monitor payload release
+just check-release <PAYLOAD_RELEASE_NAME>
+
+# 3. Promote bundle to prod (from stage rc1)
 just release bundle prod acm 2.12.42 --rc 1 --dry_run false
 
-# 3. Update catalog request for prod (creates PR to catalog repo)
+# 4. Monitor bundle release
+just check-release <BUNDLE_RELEASE_NAME>
+
+# 5. Update catalog request for prod (creates PR to catalog repo)
 just generate-snapshot catalog prod acm 2.12.42 --rc 1 --dry_run false
 
-# 4. Create catalog release files for STAGE NOT PROD (OCP versions auto-detected)
+# 6. Create catalog release files for STAGE NOT PROD (OCP versions auto-detected)
 # Note that the RC has been chosen as 1-prod. This is to generate and save
 # the new catalog release files to promote to PROD. Dry run TRUE (default)
 # is fine, these do not need to be released to stage first
 just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
 
-# 5. Promote catalog to prod (from stage rc1)
+# 7. Promote catalog to prod (from stage rc1)
 just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 
-# 6. Monitor catalog releases (OCP versions auto-detected)
+# 8. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases prod acm 2.12.42
 ```
 
@@ -276,12 +296,12 @@ Verify a catalog snapshot contains the expected app version across all relevant 
 
 **Syntax:**
 ```bash
-just verify-catalog-snapshot <app> <version> <snapshot>
+just verify-catalog-snapshot <type> <app> <version> <snapshot>
 ```
 
 **Example:**
 ```bash
-just verify-catalog-snapshot mce 2.9.4 mce-operator-catalog-stage-20260518-201839-000-kn
+just verify-catalog-snapshot stage mce 2.9.4 mce-operator-catalog-stage-20260518-201839-000-kn
 ```
 
 ---
