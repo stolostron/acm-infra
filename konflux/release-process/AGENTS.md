@@ -151,6 +151,8 @@ These processes can run for extended periods (sometimes over an hour). If a proc
 
 **Important:** When running these tasks, always include a 20 minute timeout to prevent hanging indefinitely.
 
+**Important:** Monitoring commands (`check-release`, `check-catalog-releases`, `check-commit`, `check-pr`) are long-running. Always run them asynchronously or in the background so the user can view progress and cancel if needed. Do not block the session on these commands.
+
 Track release progress:
 ```bash
 just check-release <RELEASE_NAME>

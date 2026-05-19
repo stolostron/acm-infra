@@ -75,7 +75,7 @@ just release bundle prod acm 2.12.42 --rc 1 --dry_run false
 just check-release <BUNDLE_RELEASE_NAME>
 
 # 5. Update catalog request for prod (creates PR to catalog repo)
-just generate-snapshot catalog prod acm 2.12.42 --rc 1 --dry_run false
+just generate-snapshot catalog prod acm 2.12.42 --dry_run false
 
 # 6. Create catalog release files for STAGE NOT PROD (OCP versions auto-detected)
 # Note that the RC has been chosen as 1-prod. This is to generate and save
@@ -83,7 +83,7 @@ just generate-snapshot catalog prod acm 2.12.42 --rc 1 --dry_run false
 # is fine, these do not need to be released to stage first
 just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
 
-# 7. Promote catalog to prod (from stage rc1)
+# 7. Promote catalog to prod (from stage rc1-prod files)
 just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 
 # 8. Monitor catalog releases (OCP versions auto-detected)
