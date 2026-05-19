@@ -1183,7 +1183,7 @@ get-snapshot-from-pr app pr_number: (_validate_app app) _check_github_access _ch
     echo "$snapshot_name"
 
 # Verify catalog snapshot contains the expected app version for relevant OCP versions
-verify-catalog-snapshot app version snapshot: (_validate_app app) _check_oc_cluster _check_github_access
+verify-catalog-snapshot type app version snapshot: (_validate_app app) _check_oc_cluster _check_github_access
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -1222,7 +1222,7 @@ verify-catalog-snapshot app version snapshot: (_validate_app app) _check_oc_clus
 
     for ocp_ver in "${ocp_versions[@]}"; do
         ocp_dash=$(echo "$ocp_ver" | tr '.' '-')
-        comp_name="{{app}}-fbc-ocm-${ocp_dash}-stage"
+        comp_name="{{app}}-fbc-ocm-${ocp_dash}-{{type}}"
         image="${comp_images[$comp_name]:-}"
 
         if [[ -z "$image" ]]; then
