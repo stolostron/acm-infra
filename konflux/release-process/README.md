@@ -201,7 +201,9 @@ just check-catalog-releases stage acm 2.12.42 --rc 1 "4.14-4.16"
 just check-commit abc123def456 acm-operator
 
 # Monitor GitHub PR
-just check-pr 123 stolostron/acm-mce-operator-catalogs
+just check-pr bundle-mce 3402
+just check-pr bundle-acm 1234
+just check-pr catalog 5678
 ```
 
 All monitoring recipes send desktop notifications and play sounds when complete/failed.
@@ -254,16 +256,48 @@ Retrieve FBC catalog images from releases.
 
 **Syntax:**
 ```bash
-just retrieve-fbc-catalog-images <app> <version> <rc> [ocp_versions]
+just retrieve-fbc-catalog-images <app> <version> --rc <N> [--ocp_versions <versions>]
 ```
 
 **Examples:**
 ```bash
 # Auto-detect OCP versions
-just retrieve-fbc-catalog-images acm 2.12.42 1
+just retrieve-fbc-catalog-images acm 2.12.42 --rc 1
 
 # Manual OCP versions
-just retrieve-fbc-catalog-images acm 2.12.42 1 "4.14,4.15,4.16"
+just retrieve-fbc-catalog-images acm 2.12.42 --rc 1 --ocp_versions "4.14,4.15,4.16"
+```
+
+---
+
+### `verify-catalog-snapshot` - Verify Catalog Content
+
+Verify a catalog snapshot contains the expected app version across all relevant OCP versions. Uses `opm render` to inspect each catalog image.
+
+**Syntax:**
+```bash
+just verify-catalog-snapshot <app> <version> <snapshot>
+```
+
+**Example:**
+```bash
+just verify-catalog-snapshot mce 2.9.4 mce-operator-catalog-stage-20260518-201839-000-kn
+```
+
+---
+
+### `get-catalog-snapshot` - Find Converged Catalog Snapshot
+
+Find the catalog snapshot where all components share a given git revision. Useful after on-push builds complete to find the fully-converged snapshot.
+
+**Syntax:**
+```bash
+just get-catalog-snapshot <type> <app> <commit-sha>
+```
+
+**Example:**
+```bash
+just get-catalog-snapshot stage mce 2f0ef36ccd64588a41ce9e8bfdf0e3f379fee85b
 ```
 
 ---
