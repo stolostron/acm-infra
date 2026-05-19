@@ -54,7 +54,7 @@ just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dr
 # 12. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases stage acm 2.12.42 --rc 1
 
-# 13. Create GitLab MR for release files
+# 12. Create GitLab MR for release files
 just create-mr acm 2.12.42
 ```
 
@@ -99,7 +99,7 @@ just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 # 9. Monitor catalog releases
 just check-catalog-releases prod acm 2.12.42
 
-# 10. Create GitLab MR for release files
+# 9. Create GitLab MR for release files
 just create-mr acm 2.12.42
 ```
 
@@ -150,12 +150,6 @@ just cleanup
 All recipes for a given app+version share a single GitLab branch: `release-{app}-{version}` (e.g., `release-acm-2.12.42`). Stage RCs, prod promotions — everything goes on the same branch.
 
 Files are committed and pushed incrementally after each `stage-release` and `prod-release` step, so progress is backed up to GitLab piecewise. At the end of the workflow, `create-mr` opens a GitLab MR to merge the branch into main.
-
-## Multi-App Ordering (ACM + MCE)
-
-When releasing both ACM and MCE together:
-- **Payload and bundle steps** may be run concurrently for ACM and MCE (no dependency between them).
-- **Catalog step**: MCE catalog must be fully built and released **before** starting the ACM catalog. This applies to all catalog sub-steps (`generate-snapshot catalog`, PR merge, `release catalog`). Complete the entire MCE catalog flow first, then proceed with ACM.
 
 ## Common "Gotchas"
 - This justfile is using `just 1.46.0`, which has new ways of handeling recipe arguments. No longer do you specify arguments with arg=value, you must instead add the [arg()] descriptor and then pass the argument with `--arg value`. Global variables are still specified with `arg=value` *before* the recipe call (example: `just debug=true <recipe> --<arg> <value>`)
