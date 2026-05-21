@@ -382,6 +382,12 @@ acm-release-management/
 
 ## Important Notes
 
+### Multi-App Ordering (ACM + MCE)
+
+When releasing both ACM and MCE together:
+- **Payload and bundle steps** may be run concurrently for ACM and MCE (no dependency between them).
+- **Catalog step**: MCE catalog must be fully built and released **before** starting the ACM catalog. This applies to all catalog sub-steps (`generate-snapshot catalog`, PR merge, `release catalog`). Complete the entire MCE catalog flow first, then proceed with ACM.
+
 ### Y-stream vs Z-stream Releases
 
 - **Y-stream releases** (X.Y.0): Skip bug/CVE queries, always RHEA type

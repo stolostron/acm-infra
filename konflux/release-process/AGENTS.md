@@ -148,6 +148,12 @@ All recipes for a given app+version share a single GitLab branch: `release-{app}
 
 Files are committed and pushed incrementally after each `stage-release` and `prod-release` step, so progress is backed up to GitLab piecewise. At the end of the workflow, `create-mr` opens a GitLab MR to merge the branch into main.
 
+## Multi-App Ordering (ACM + MCE)
+
+When releasing both ACM and MCE together:
+- **Payload and bundle steps** may be run concurrently for ACM and MCE (no dependency between them).
+- **Catalog step**: MCE catalog must be fully built and released **before** starting the ACM catalog. This applies to all catalog sub-steps (`generate-snapshot catalog`, PR merge, `release catalog`). Complete the entire MCE catalog flow first, then proceed with ACM.
+
 ## Common "Gotchas"
 - This justfile is using `just 1.46.0`, which has new ways of handeling recipe arguments. No longer do you specify arguments with arg=value, you must instead add the [arg()] descriptor and then pass the argument with `--arg value`. Global variables are still specified with `arg=value` *before* the recipe call (example: `just debug=true <recipe> --<arg> <value>`)
 - **All apply operations default to dry-run** - Must pass `--dry_run false` to apply live
