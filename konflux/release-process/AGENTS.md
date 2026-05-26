@@ -45,13 +45,16 @@ just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
 just check-pr catalog <PR_NUMBER>
 just check-commit <MERGE_COMMIT_SHA>
 
-# 10. Create catalog release (OCP versions auto-detected)
+# 10. Get catalog snapshot from merged PR
+just get-catalog-snapshot stage acm <MERGE_COMMIT_SHA>
+
+# 11. Create catalog release (OCP versions auto-detected)
 just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dry_run false
 
-# 11. Monitor catalog releases (OCP versions auto-detected)
+# 12. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases stage acm 2.12.42 --rc 1
 
-# 12. Create GitLab MR for release files
+# 13. Create GitLab MR for release files
 just create-mr acm 2.12.42
 ```
 
