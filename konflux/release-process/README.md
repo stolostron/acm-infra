@@ -58,6 +58,9 @@ just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dr
 
 # 12. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases stage acm 2.12.42 --rc 1
+
+# 13. Create GitLab MR for release files
+just create-mr acm 2.12.42
 ```
 
 #### Prod Release Workflow
@@ -80,17 +83,27 @@ just check-release <BUNDLE_RELEASE_NAME>
 # 5. Update catalog request for prod (creates PR to catalog repo)
 just generate-snapshot catalog prod acm 2.12.42 --dry_run false
 
-# 6. Create catalog release files for STAGE NOT PROD (OCP versions auto-detected)
-# Note that the RC has been chosen as 1-prod. This is to generate and save
-# the new catalog release files to promote to PROD. Dry run TRUE (default)
-# is fine, these do not need to be released to stage first
+# 6. Monitor catalog PR merge and wait for pipeline builds
+just check-pr catalog <PR_NUMBER>
+just check-commit <MERGE_COMMIT_SHA>
+
+# ⚠️  MANDATORY PAUSE: Send the catalog snapshot to QE in the release thread and
+#    WAIT for QE testing to complete before continuing! Do NOT proceed until QE signs off.
+# Get the catalog snapshot from the merged PR commit:
+just get-catalog-snapshot prod acm <MERGE_COMMIT_SHA>
+
+# 7. Create catalog release files for STAGE NOT PROD
+# Note: RC is 1-prod to generate catalog files. Dry run TRUE is fine.
 just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
 
-# 7. Promote catalog to prod (from stage rc1-prod files)
+# 8. Promote catalog to prod (from stage rc1-prod)
 just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 
-# 8. Monitor catalog releases (OCP versions auto-detected)
+# 9. Monitor catalog releases
 just check-catalog-releases prod acm 2.12.42
+
+# 10. Create GitLab MR for release files
+just create-mr acm 2.12.42
 ```
 
 ## Main Workflows
