@@ -45,11 +45,17 @@ just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
 just check-pr catalog <PR_NUMBER>
 just check-commit <MERGE_COMMIT_SHA>
 
-# 10. Create catalog release (OCP versions auto-detected)
+# 10. Get catalog snapshot from merged PR
+just get-catalog-snapshot stage acm <MERGE_COMMIT_SHA>
+
+# 11. Create catalog release (OCP versions auto-detected)
 just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dry_run false
 
-# 11. Monitor catalog releases (OCP versions auto-detected)
+# 12. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases stage acm 2.12.42 --rc 1
+
+# 13. Create GitLab MR for release files
+just create-mr acm 2.12.42
 ```
 
 ## Prod Release Workflow
@@ -74,15 +80,27 @@ just check-release <BUNDLE_RELEASE_NAME>
 # 5. Update catalog request for prod (creates PR to catalog repo, rc not needed for prod)
 just generate-snapshot catalog prod acm 2.12.42 --dry_run false
 
-# 6. Create catalog release files for STAGE NOT PROD
+# 6. Monitor catalog PR merge and wait for pipeline builds
+just check-pr catalog <PR_NUMBER>
+just check-commit <MERGE_COMMIT_SHA>
+
+# ⚠️  MANDATORY PAUSE: Send the catalog snapshot to QE in the release thread and
+#    WAIT for QE testing to complete before continuing! Do NOT proceed until QE signs off.
+# Get the catalog snapshot from the merged PR commit:
+just get-catalog-snapshot prod acm <MERGE_COMMIT_SHA>
+
+# 7. Create catalog release files for STAGE NOT PROD
 # Note: RC is 1-prod to generate catalog files. Dry run TRUE is fine.
 just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
 
-# 7. Promote catalog to prod (from stage rc1-prod)
+# 8. Promote catalog to prod (from stage rc1-prod)
 just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 
-# 8. Monitor catalog releases
+# 9. Monitor catalog releases
 just check-catalog-releases prod acm 2.12.42
+
+# 10. Create GitLab MR for release files
+just create-mr acm 2.12.42
 ```
 
 ## Key Command Syntax
@@ -122,9 +140,22 @@ just get-snapshot-from-pr <app> <pr-number>
 just verify-catalog-snapshot <type> <app> <version> <snapshot>
 just get-catalog-snapshot <type> <app> <commit-sha>
 just get-advisory <release-name>
+just create-mr <app> <version>
 just clone-release-mgmt <branch-name>
 just cleanup
 ```
+
+## Branch Model
+
+All recipes for a given app+version share a single GitLab branch: `release-{app}-{version}` (e.g., `release-acm-2.12.42`). Stage RCs, prod promotions — everything goes on the same branch.
+
+Files are committed and pushed incrementally after each `stage-release` and `prod-release` step, so progress is backed up to GitLab piecewise. At the end of the workflow, `create-mr` opens a GitLab MR to merge the branch into main.
+
+## Multi-App Ordering (ACM + MCE)
+
+When releasing both ACM and MCE together:
+- **Payload and bundle steps** may be run concurrently for ACM and MCE (no dependency between them).
+- **Catalog step**: MCE catalog must be fully built and released **before** starting the ACM catalog. This applies to all catalog sub-steps (`generate-snapshot catalog`, PR merge, `release catalog`). Complete the entire MCE catalog flow first, then proceed with ACM.
 
 ## Common "Gotchas"
 - This justfile is using `just 1.46.0`, which has new ways of handeling recipe arguments. No longer do you specify arguments with arg=value, you must instead add the [arg()] descriptor and then pass the argument with `--arg value`. Global variables are still specified with `arg=value` *before* the recipe call (example: `just debug=true <recipe> --<arg> <value>`)

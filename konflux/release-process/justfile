@@ -70,6 +70,7 @@ help:
     @echo "  verify-catalog-snapshot <type> <app> <version> <snapshot>"
     @echo "  get-catalog-snapshot <type> <app> <commit-sha>"
     @echo "  get-advisory <release-name>"
+    @echo "  create-mr <app> <version>   - Create GitLab MR for release files"
     @echo "  clone-release-mgmt <branch-name>"
     @echo "  cleanup - Remove cloned repos"
     @echo ""
@@ -105,11 +106,17 @@ help:
     @echo "  just check-pr catalog <PR_NUMBER>"
     @echo "  just check-commit <MERGE_COMMIT_SHA>"
     @echo ""
-    @echo "  # 10. Create catalog release (OCP versions auto-detected)"
-    @echo "  just release catalog stage acm 2.12.42 --snapshot snapshot-def --rc 1 --dry_run false"
+    @echo "  # 10. Get catalog snapshot from merged PR"
+    @echo "  just get-catalog-snapshot stage acm <MERGE_COMMIT_SHA>"
     @echo ""
-    @echo "  # 11. Monitor catalog releases"
+    @echo "  # 11. Create catalog release (OCP versions auto-detected)"
+    @echo "  just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dry_run false"
+    @echo ""
+    @echo "  # 12. Monitor catalog releases"
     @echo "  just check-catalog-releases stage acm 2.12.42 --rc 1"
+    @echo ""
+    @echo "  # 13. Create GitLab MR for release files (after all steps done)"
+    @echo "  just create-mr acm 2.12.42"
     @echo ""
     @echo "Prod Release Workflow:"
     @echo "  Note: --rc specifies which stage RC to promote from (e.g. --rc 1 promotes from stage rc1)"
@@ -140,6 +147,14 @@ help:
     @echo ""
     @echo "  # 8. Monitor catalog releases"
     @echo "  just check-catalog-releases prod acm 2.12.42"
+    @echo ""
+    @echo "  # 9. Create GitLab MR for release files (after all steps done)"
+    @echo "  just create-mr acm 2.12.42"
+    @echo ""
+    @echo "NOTES:"
+    @echo "  All recipes share a single branch: release-{app}-{version}"
+    @echo "  Files are pushed incrementally after each step for backup"
+    @echo "  create-mr opens a GitLab MR at the end of the workflow"
     @echo ""
     @echo "VARIABLES:"
     @echo "  debug=true        Enable debug output"
@@ -195,7 +210,7 @@ query-bugs app version bundle="false": _check_yq
     fi
 
     # Build the JQL query for bugs
-    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and statuscategory in (done) and issuetype NOT IN (Weakness, Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC_Cases_Counter\" > 0)${bundle_clause}"
+    jql_query="project = \"Red Hat Advanced Cluster Management\" and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and statuscategory in (done) and issuetype NOT IN (Vulnerability) and (labels in (doc-required, doc-require, doc-req) OR \"SFDC_Cases_Counter\" > 0)${bundle_clause}"
 
     # Query Jira for bugs
     jira_output=$(jira issue list -q "$jql_query" --raw 2>&1) || {
@@ -1173,6 +1188,69 @@ cleanup:
         fi
     done
 
+# Create a GitLab merge request for the release management branch
+create-mr app version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    repo_dir="acm-release-management"
+    branch_name="release-{{app}}-{{version}}"
+    gitlab_host="gitlab.cee.redhat.com"
+    upstream="acm/acm-release-management"
+    app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
+
+    if [ ! -d "$repo_dir" ]; then
+        echo "❌ Release management repo not found" >&2
+        echo "   Run a release workflow first to populate it" >&2
+        exit 1
+    fi
+
+    cd "$repo_dir"
+
+    # Verify we're on the expected branch
+    current_branch=$(git branch --show-current)
+    if [ "$current_branch" != "$branch_name" ]; then
+        echo "❌ Expected branch '$branch_name' but on '$current_branch'" >&2
+        exit 1
+    fi
+
+    # Check there are commits ahead of main
+    commits_ahead=$(git rev-list --count origin/main..HEAD 2>/dev/null || echo "0")
+    if [ "$commits_ahead" = "0" ]; then
+        echo "❌ No commits ahead of main — nothing to merge" >&2
+        exit 1
+    fi
+
+    echo "📬 Creating merge request on GitLab..."
+    echo "   Branch: $branch_name ($commits_ahead commits ahead of main)"
+    echo "   Target: main"
+    echo ""
+
+    # Show commit log
+    echo "Commits:"
+    git log --oneline origin/main..HEAD
+    echo ""
+
+    # Empty commit needed for git push -o to trigger MR creation
+    git commit --allow-empty -m "Trigger MR creation"
+
+    # Push and create MR via git push options
+    mr_title="${app_upper} {{version}} release files"
+
+    push_output=$(git push origin HEAD \
+        -o merge_request.create \
+        -o merge_request.target=main \
+        -o "merge_request.title=${mr_title}" 2>&1)
+
+    echo "$push_output"
+
+    # Extract and display MR URL
+    mr_url=$(echo "$push_output" | grep -oE 'https://[^ ]+merge_requests/[0-9]+' | head -1)
+    if [ -n "$mr_url" ]; then
+        echo ""
+        echo "✅ Merge request created: $mr_url"
+    fi
+
 # Get snapshot name from merged PR number
 get-snapshot-from-pr app pr_number: (_validate_app app) _check_github_access _check_oc_cluster
     #!/usr/bin/env bash
@@ -1345,9 +1423,14 @@ clone-release-mgmt branch_name:
     # Create branch from main if it doesn't exist, otherwise switch to it
     if git show-ref --verify --quiet refs/heads/{{branch_name}}; then
         git checkout {{branch_name}}
+        git pull origin {{branch_name}} --ff-only 2>/dev/null || true
         echo "✅ Switched to existing branch {{branch_name}}"
+    elif git show-ref --verify --quiet refs/remotes/origin/{{branch_name}}; then
+        git checkout -b {{branch_name}} origin/{{branch_name}}
+        echo "✅ Checked out remote branch {{branch_name}}"
     else
         git checkout -b {{branch_name}} origin/main
+        git push -u origin {{branch_name}}
         echo "✅ Branch {{branch_name}} created from origin/main"
     fi
 
@@ -1377,14 +1460,8 @@ stage-release target app version snapshot rc="" skip_confirm="false" dry_run="tr
         echo "  ✓ Detected OCP versions: ${ocp_versions_resolved}" >&2
     fi
 
-    # Build rc argument if provided
-    rc_arg=""
-    if [ -n "{{rc}}" ]; then
-        rc_arg="--rc {{rc}}"
-    fi
-
     # Ensure workspace exists and correct branch checked out
-    workspace_dir=$(just _ensure_release_mgmt_workspace stage {{app}} {{version}} $rc_arg)
+    workspace_dir=$(just _ensure_release_mgmt_workspace stage {{app}} {{version}})
 
     # Build directory path (stage always goes in rc subdirectory)
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
@@ -1435,6 +1512,9 @@ stage-release target app version snapshot rc="" skip_confirm="false" dry_run="tr
         just _apply "$target_yaml" {{skip_confirm}} {{dry_run}}
     fi
 
+    # Push release files incrementally
+    just _push_release_mgmt_files "stage {{target}} {{app}} {{version}} rc{{rc}}"
+
 # Promote stage to prod: copy stage file, update for prod, and apply to cluster
 [arg("rc", long="rc")]
 [arg("skip_confirm", long="skip_confirm")]
@@ -1452,14 +1532,8 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true": (_val
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build rc argument if provided
-    rc_arg=""
-    if [ -n "{{rc}}" ]; then
-        rc_arg="--rc {{rc}}"
-    fi
-
     # Ensure workspace exists and correct branch checked out
-    workspace_dir=$(just _ensure_release_mgmt_workspace prod {{app}} {{version}} $rc_arg)
+    workspace_dir=$(just _ensure_release_mgmt_workspace prod {{app}} {{version}})
 
     # Build paths
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
@@ -1566,6 +1640,9 @@ prod-release target app version rc="" skip_confirm="false" dry_run="true": (_val
         just _apply "$prod_yaml" {{skip_confirm}} {{dry_run}}
     fi
 
+    # Push release files incrementally
+    just _push_release_mgmt_files "prod {{target}} {{app}} {{version}} (from stage rc{{rc}})"
+
 # Generate snapshot updates: wrapper for bundle or catalog snapshot updates
 [arg("rc", long="rc")]
 [arg("skip_confirm", long="skip_confirm")]
@@ -1604,14 +1681,8 @@ update-bundle-snapshot type app version rc="" skip_confirm="false" dry_run="true
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build rc argument if provided
-    rc_arg=""
-    if [ -n "{{rc}}" ]; then
-        rc_arg="--rc {{rc}}"
-    fi
-
     # Ensure workspace exists and correct branch checked out
-    workspace_dir=$(just _ensure_release_mgmt_workspace {{type}} {{app}} {{version}} $rc_arg)
+    workspace_dir=$(just _ensure_release_mgmt_workspace {{type}} {{app}} {{version}})
 
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
     release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
@@ -1790,14 +1861,8 @@ update-catalog-request type app version rc="" skip_confirm="false" dry_run="true
     # Parse version
     read -r major minor patch short_version <<< $(just _parse_version {{version}})
 
-    # Build rc argument if provided
-    rc_arg=""
-    if [ -n "{{rc}}" ]; then
-        rc_arg="--rc {{rc}}"
-    fi
-
     # Ensure workspace exists and correct branch checked out
-    workspace_dir=$(just _ensure_release_mgmt_workspace {{type}} {{app}} {{version}} $rc_arg)
+    workspace_dir=$(just _ensure_release_mgmt_workspace {{type}} {{app}} {{version}})
 
     app_upper=$(echo "{{app}}" | tr '[:lower:]' '[:upper:]')
     release_dir="$workspace_dir/${app_upper}/${app_upper}-{{version}}"
@@ -1814,7 +1879,7 @@ update-catalog-request type app version rc="" skip_confirm="false" dry_run="true
     # Verify bundle snapshot file exists
     if [ ! -f "$bundle_snapshot_file" ]; then
         echo "❌ Bundle snapshot file not found: $bundle_snapshot_file" >&2
-        echo "   Run 'just release bundle {{type}} {{app}} {{version}} <snapshot> $rc_arg' first" >&2
+        echo "   Run 'just release bundle {{type}} {{app}} {{version}} <snapshot> --rc {{rc}}' first" >&2
         exit 1
     fi
 
