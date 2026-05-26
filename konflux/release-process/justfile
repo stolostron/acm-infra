@@ -1245,7 +1245,7 @@ create-mr app version:
     echo "$push_output"
 
     # Extract and display MR URL
-    mr_url=$(echo "$push_output" | grep -oP 'https://[^ ]+merge_requests/\d+' | head -1)
+    mr_url=$(echo "$push_output" | grep -oE 'https://[^ ]+merge_requests/[0-9]+' | head -1)
     if [ -n "$mr_url" ]; then
         echo ""
         echo "✅ Merge request created: $mr_url"
