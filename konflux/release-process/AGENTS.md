@@ -54,7 +54,7 @@ just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dr
 # 12. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases stage acm 2.12.42 --rc 1
 
-# 12. Create GitLab MR for release files
+# 13. Create GitLab MR for release files
 just create-mr acm 2.12.42
 ```
 

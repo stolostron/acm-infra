@@ -115,7 +115,7 @@ help:
     @echo "  # 12. Monitor catalog releases"
     @echo "  just check-catalog-releases stage acm 2.12.42 --rc 1"
     @echo ""
-    @echo "  # 12. Create GitLab MR for release files (after all steps done)"
+    @echo "  # 13. Create GitLab MR for release files (after all steps done)"
     @echo "  just create-mr acm 2.12.42"
     @echo ""
     @echo "Prod Release Workflow:"
@@ -1231,24 +1231,24 @@ create-mr app version:
     git log --oneline origin/main..HEAD
     echo ""
 
-    # Build MR URL for push-and-create flow
+    # Empty commit needed for git push -o to trigger MR creation
+    git commit --allow-empty -m "Trigger MR creation"
+
+    # Push and create MR via git push options
     mr_title="${app_upper} {{version}} release files"
-    encoded_title=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${mr_title}'))")
 
-    # Push latest (should be up-to-date from incremental pushes, but ensure)
-    git push origin HEAD
+    push_output=$(git push origin HEAD \
+        -o merge_request.create \
+        -o merge_request.target=main \
+        -o "merge_request.title=${mr_title}" 2>&1)
 
-    # Open MR creation URL
-    mr_url="https://${gitlab_host}/${upstream}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${branch_name}&merge_request%5Btarget_branch%5D=main&merge_request%5Btitle%5D=${encoded_title}"
+    echo "$push_output"
 
-    echo "🔗 Open this URL to create the merge request:"
-    echo "   $mr_url"
-    echo ""
-
-    # Try xdg-open if available
-    if command -v xdg-open &>/dev/null; then
-        echo "Opening in browser..."
-        xdg-open "$mr_url" 2>/dev/null || true
+    # Extract and display MR URL
+    mr_url=$(echo "$push_output" | grep -oP 'https://[^ ]+merge_requests/\d+' | head -1)
+    if [ -n "$mr_url" ]; then
+        echo ""
+        echo "✅ Merge request created: $mr_url"
     fi
 
 # Get snapshot name from merged PR number
