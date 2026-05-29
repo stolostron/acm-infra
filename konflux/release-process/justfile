@@ -118,7 +118,10 @@ help:
     @echo "  # 12. Monitor catalog releases"
     @echo "  just check-catalog-releases stage acm 2.12.42 --rc 1"
     @echo ""
-    @echo "  # 13. Create GitLab MR for release files (after all steps done)"
+    @echo "  # 13. Retrieve catalog index images (for QE/release thread)"
+    @echo "  just retrieve-fbc-catalog-images acm 2.12.42 --rc 1"
+    @echo ""
+    @echo "  # 14. Create GitLab MR for release files (after all steps done)"
     @echo "  just create-mr acm 2.12.42"
     @echo ""
     @echo "Prod Release Workflow:"
@@ -1211,11 +1214,20 @@ create-mr app version:
 
     cd "$repo_dir"
 
-    # Verify we're on the expected branch
+    # Switch to the expected branch if not already on it
     current_branch=$(git branch --show-current)
     if [ "$current_branch" != "$branch_name" ]; then
-        echo "❌ Expected branch '$branch_name' but on '$current_branch'" >&2
-        exit 1
+        echo "⚠️  On branch '$current_branch', switching to '$branch_name'..." >&2
+        git fetch origin
+        if git show-ref --verify --quiet refs/heads/"$branch_name"; then
+            git checkout "$branch_name"
+            git pull origin "$branch_name" --ff-only 2>/dev/null || true
+        elif git show-ref --verify --quiet refs/remotes/origin/"$branch_name"; then
+            git checkout -b "$branch_name" origin/"$branch_name"
+        else
+            echo "❌ Branch '$branch_name' not found locally or on remote" >&2
+            exit 1
+        fi
     fi
 
     # Check there are commits ahead of main
