@@ -46,7 +46,7 @@ just check-pr catalog <PR_NUMBER>
 just check-commit <MERGE_COMMIT_SHA>
 
 # 10. Get catalog snapshot from merged PR
-just get-catalog-snapshot stage acm <MERGE_COMMIT_SHA>
+just get-catalog-snapshot stage acm 2.12.42 <MERGE_COMMIT_SHA>
 
 # 11. Create catalog release (OCP versions auto-detected)
 just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dry_run false
@@ -87,7 +87,7 @@ just check-commit <MERGE_COMMIT_SHA>
 # ⚠️  MANDATORY PAUSE: Send the catalog snapshot to QE in the release thread and
 #    WAIT for QE testing to complete before continuing! Do NOT proceed until QE signs off.
 # Get the catalog snapshot from the merged PR commit:
-just get-catalog-snapshot prod acm <MERGE_COMMIT_SHA>
+just get-catalog-snapshot prod acm 2.12.42 <MERGE_COMMIT_SHA>
 
 # 7. Create catalog release files for STAGE NOT PROD
 # Note: RC is 1-prod to generate catalog files. Dry run TRUE is fine.
@@ -125,6 +125,14 @@ just generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run fal
 - **target**: bundle (updates operator bundle repo) or catalog (updates catalog request)
 - **--rc**: Required for stage, not used for prod
 
+### RC Selection for `generate-snapshot`
+
+**Important:** The `--rc` value in `generate-snapshot` selects the *source snapshot* from the previous step, not the RC being created:
+- `generate-snapshot bundle` uses `--rc` to select the **payload** snapshot (from `release payload`)
+- `generate-snapshot catalog` uses `--rc` to select the **bundle** snapshot (from `release bundle`)
+
+This matters when retrying with a new RC suffix (e.g., `1-3`). If the payload was released under `rc1`, then `generate-snapshot bundle` still uses `--rc 1` to find that payload snapshot. But `release bundle` and subsequent steps use the new RC (`1-3`).
+
 Monitoring:
 ```bash
 just check-release <release-name>
@@ -138,7 +146,7 @@ Utilities:
 just retrieve-fbc-catalog-images <app> <version> --rc <N> [--ocp_versions <versions>]
 just get-snapshot-from-pr <app> <pr-number>
 just verify-catalog-snapshot <type> <app> <version> <snapshot>
-just get-catalog-snapshot <type> <app> <commit-sha>
+just get-catalog-snapshot <type> <app> <version> <commit-sha>
 just get-advisory <release-name>
 just create-mr <app> <version>
 just clone-release-mgmt <branch-name>
@@ -156,6 +164,7 @@ Files are committed and pushed incrementally after each `stage-release` and `pro
 When releasing both ACM and MCE together:
 - **Payload and bundle steps** may be run concurrently for ACM and MCE (no dependency between them).
 - **Catalog step**: MCE catalog must be fully built and released **before** starting the ACM catalog. This applies to all catalog sub-steps (`generate-snapshot catalog`, PR merge, `release catalog`). Complete the entire MCE catalog flow first, then proceed with ACM.
+  - The PR that is created with `generate-snapshot` auto-merges if successful, so we cannot expect to pause during this step. The PR will merge, and the snapshot will be generated
 
 ## Common "Gotchas"
 - This justfile is using `just 1.46.0`, which has new ways of handeling recipe arguments. No longer do you specify arguments with arg=value, you must instead add the [arg()] descriptor and then pass the argument with `--arg value`. Global variables are still specified with `arg=value` *before* the recipe call (example: `just debug=true <recipe> --<arg> <value>`)

@@ -31,6 +31,9 @@ help:
     @echo "  generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run false]"
     @echo "    Update snapshot files and create PRs"
     @echo "    Targets: bundle (updates operator bundle repo), catalog (updates catalog request)"
+    @echo "    Note: --rc selects the SOURCE snapshot from the previous step:"
+    @echo "      bundle: --rc selects the payload snapshot (from 'release payload')"
+    @echo "      catalog: --rc selects the bundle snapshot (from 'release bundle')"
     @echo "    Example: just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false"
     @echo ""
     @echo "QUERY & GENERATE:"
@@ -68,7 +71,7 @@ help:
     @echo "  retrieve-fbc-catalog-images <app> <version> --rc <N> [--ocp_versions <versions>]"
     @echo "  get-snapshot-from-pr <app> <pr-number>"
     @echo "  verify-catalog-snapshot <type> <app> <version> <snapshot>"
-    @echo "  get-catalog-snapshot <type> <app> <commit-sha>"
+    @echo "  get-catalog-snapshot <type> <app> <version> <commit-sha>"
     @echo "  get-advisory <release-name>"
     @echo "  create-mr <app> <version>   - Create GitLab MR for release files"
     @echo "  clone-release-mgmt <branch-name>"
@@ -107,7 +110,7 @@ help:
     @echo "  just check-commit <MERGE_COMMIT_SHA>"
     @echo ""
     @echo "  # 10. Get catalog snapshot from merged PR"
-    @echo "  just get-catalog-snapshot stage acm <MERGE_COMMIT_SHA>"
+    @echo "  just get-catalog-snapshot stage acm 2.12.42 <MERGE_COMMIT_SHA>"
     @echo ""
     @echo "  # 11. Create catalog release (OCP versions auto-detected)"
     @echo "  just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dry_run false"
@@ -605,7 +608,7 @@ check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
 
             YAML=$(oc get release "$release_name" -oyaml 2>/dev/null)
             STATUS=$(echo "$YAML" | yq '.status.conditions[] | select(.type == "Released") | .status')
-            PROGRESSING=$(echo "$YAML" | yq '.status.conditions[] | select(.type == "Progressing") | .status')
+            REASON=$(echo "$YAML" | yq '.status.conditions[] | select(.type == "Released") | .reason')
 
             if [[ "$STATUS" == "True" ]]; then
                 RELEASES[$release_name]="notified"
@@ -615,7 +618,7 @@ check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
                 which pw-play >/dev/null 2>&1 && pw-play /usr/share/sounds/freedesktop/stereo/complete.oga --volume 0.5 >/dev/null
 
                 p "  ✅ $release_name: Complete"
-            elif [[ "$STATUS" == "False" && "$PROGRESSING" == "Failed" ]]; then
+            elif [[ "$STATUS" == "False" && "$REASON" == "Failed" ]]; then
                 RELEASES[$release_name]="notified"
                 ((COMPLETED++))
 
@@ -624,7 +627,7 @@ check-catalog-releases type app version rc="" ocp_versions="": _check_oc_cluster
 
                 p "  ❌ $release_name: Failed"
             else
-                p "  ⏳ $release_name: Released=$STATUS, Progressing=$PROGRESSING"
+                p "  ⏳ $release_name: Released=$STATUS, Reason=$REASON"
             fi
         done
 
@@ -797,7 +800,7 @@ check-release release:
     done
 
 # checking Konflux commit pipeline runs with notifications
-check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
+check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant": _check_oc_cluster
     #!/usr/bin/env bash
 
     # Build label selectors (build and test use different SHA labels)
@@ -846,6 +849,7 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
         fi
 
         # Build associative arrays: component -> stage/prod -> status
+        unset COMPONENTS STAGE_BUILD PROD_BUILD STAGE_EC PROD_EC
         declare -A COMPONENTS
         declare -A STAGE_BUILD
         declare -A PROD_BUILD
@@ -856,9 +860,9 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
         while IFS='|' read -r NAME STATUS REASON; do
             [[ -z "$NAME" ]] && continue
 
-            if [[ "$NAME" =~ ^(.+)-(stage|prod)-on-push- ]]; then
+            if [[ "$NAME" =~ ^(.+)-((stage|prod)-)?on-push- ]]; then
                 COMPONENT="${BASH_REMATCH[1]}"
-                TYPE="${BASH_REMATCH[2]}"
+                TYPE="${BASH_REMATCH[3]:-stage}"
                 COMPONENTS["$COMPONENT"]=1
 
                 case "$STATUS" in
@@ -879,9 +883,9 @@ check-commit commit_sha app_name="" namespace="crt-redhat-acm-tenant":
         while IFS='|' read -r NAME STATUS REASON; do
             [[ -z "$NAME" ]] && continue
 
-            if [[ "$NAME" =~ ^enterprise-contract-(.+)-(stage|prod)- ]]; then
+            if [[ "$NAME" =~ ^enterprise-contract-(.+)-((stage|prod)-)? ]]; then
                 COMPONENT="${BASH_REMATCH[1]}"
-                TYPE="${BASH_REMATCH[2]}"
+                TYPE="${BASH_REMATCH[3]:-stage}"
                 COMPONENTS["$COMPONENT"]=1
 
                 case "$STATUS" in
@@ -1364,34 +1368,55 @@ verify-catalog-snapshot type app version snapshot: (_validate_app app) _check_oc
         exit 1
     fi
 
-# Find the catalog snapshot where all components share the given git revision
-get-catalog-snapshot type app commit_sha: (_validate_app app) _check_oc_cluster
+# Find the catalog snapshot where required OCP components share the given git revision
+get-catalog-snapshot type app version commit_sha: (_validate_app app) _check_oc_cluster
     #!/usr/bin/env bash
     set -euo pipefail
 
     application="{{app}}-operator-catalog-{{type}}"
     namespace="crt-redhat-acm-tenant"
 
+    # Get required OCP versions and build required component names
+    ocp_csv=$(just _get_ocp_versions {{app}} {{version}})
+    IFS=',' read -ra ocp_versions <<< "$ocp_csv"
+
+    required_components=()
+    for ocp_ver in "${ocp_versions[@]}"; do
+        ocp_dash=$(echo "$ocp_ver" | tr '.' '-')
+        required_components+=("{{app}}-fbc-ocm-${ocp_dash}-{{type}}")
+    done
+
+    # Build jq filter array
+    required_json=$(printf '%s\n' "${required_components[@]}" | jq -R . | jq -s .)
+
     echo "🔍 Finding catalog snapshot for $application with commit {{commit_sha}}..." >&2
+    echo "   Required components: ${required_components[*]}" >&2
 
     snapshot_name=$(oc get snapshots -n "$namespace" \
         -l "appstudio.openshift.io/application=$application" \
-        -o json | jq -r --arg app "$application" --arg sha "{{commit_sha}}" '
+        -o json | jq -r --arg app "$application" --arg sha "{{commit_sha}}" --argjson required "$required_json" '
         [.items[] |
         select(.metadata.name | startswith($app + "-")) |
-        [.spec.components[].source.git.revision // "none"] as $revs |
-        select(($revs | unique) == [$sha])] |
+        # Check only required components have the expected revision
+        select(
+            [.spec.components[] |
+            select(.name as $n | $required | index($n)) |
+            .source.git.revision // "none"] as $revs |
+            ($revs | length) == ($required | length) and
+            ($revs | unique) == [$sha]
+        )] |
         sort_by(.metadata.creationTimestamp) | last | .metadata.name // empty
     ')
 
     if [ -z "$snapshot_name" ]; then
         echo "❌ No converged snapshot found" >&2
-        echo "   All components must have git revision {{commit_sha}}" >&2
+        echo "   Required components must have git revision {{commit_sha}}" >&2
         exit 1
     fi
 
     component_count=$(oc get snapshot "$snapshot_name" -n "$namespace" -o json | jq '.spec.components | length')
-    echo "  Snapshot: $snapshot_name ($component_count components)" >&2
+    matched_count=${#required_components[@]}
+    echo "  Snapshot: $snapshot_name ($component_count total components, $matched_count required)" >&2
     echo "" >&2
 
     echo "$snapshot_name"
