@@ -51,7 +51,7 @@ just check-pr catalog <PR_NUMBER>
 just check-commit <MERGE_COMMIT_SHA>
 
 # 10. Get catalog snapshot from merged PR
-just get-catalog-snapshot stage acm <MERGE_COMMIT_SHA>
+just get-catalog-snapshot stage acm 2.12.42 <MERGE_COMMIT_SHA>
 
 # 11. Create catalog release (OCP versions auto-detected)
 just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dry_run false
@@ -59,7 +59,10 @@ just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dr
 # 12. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases stage acm 2.12.42 --rc 1
 
-# 13. Create GitLab MR for release files
+# 13. Retrieve catalog index images (for QE/release thread)
+just retrieve-fbc-catalog-images acm 2.12.42 --rc 1
+
+# 14. Create GitLab MR for release files
 just create-mr acm 2.12.42
 ```
 
@@ -90,7 +93,7 @@ just check-commit <MERGE_COMMIT_SHA>
 # ⚠️  MANDATORY PAUSE: Send the catalog snapshot to QE in the release thread and
 #    WAIT for QE testing to complete before continuing! Do NOT proceed until QE signs off.
 # Get the catalog snapshot from the merged PR commit:
-just get-catalog-snapshot prod acm <MERGE_COMMIT_SHA>
+just get-catalog-snapshot prod acm 2.12.42 <MERGE_COMMIT_SHA>
 
 # 7. Create catalog release files for STAGE NOT PROD
 # Note: RC is 1-prod to generate catalog files. Dry run TRUE is fine.
@@ -168,6 +171,14 @@ just generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run fal
   - Extracts bundle container image from bundle snapshot
   - Updates `catalog-request.yaml` with new image and timestamp
   - Creates PR to acm-redhat-operators or mce-redhat-operators branch
+
+**RC Selection:**
+
+The `--rc` value selects the *source snapshot* from the previous step, not the RC being created:
+- `generate-snapshot bundle` uses `--rc` to find the **payload** snapshot (from `release payload`)
+- `generate-snapshot catalog` uses `--rc` to find the **bundle** snapshot (from `release bundle`)
+
+This matters when retrying with a new RC suffix (e.g., `1-3`). If the payload was released under `rc1`, then `generate-snapshot bundle` still uses `--rc 1` to find that payload snapshot. But `release bundle` and subsequent steps use the new RC (`1-3`).
 
 **Examples:**
 ```bash
@@ -324,16 +335,16 @@ just verify-catalog-snapshot stage mce 2.9.4 mce-operator-catalog-stage-20260518
 
 ### `get-catalog-snapshot` - Find Converged Catalog Snapshot
 
-Find the catalog snapshot where all components share a given git revision. Useful after on-push builds complete to find the fully-converged snapshot.
+Find the catalog snapshot where all required OCP components share a given git revision. Useful after on-push builds complete to find the fully-converged snapshot. Required OCP versions are auto-detected from catalog config.
 
 **Syntax:**
 ```bash
-just get-catalog-snapshot <type> <app> <commit-sha>
+just get-catalog-snapshot <type> <app> <version> <commit-sha>
 ```
 
 **Example:**
 ```bash
-just get-catalog-snapshot stage mce 2f0ef36ccd64588a41ce9e8bfdf0e3f379fee85b
+just get-catalog-snapshot stage mce 2.11.2 2f0ef36ccd64588a41ce9e8bfdf0e3f379fee85b
 ```
 
 ---
