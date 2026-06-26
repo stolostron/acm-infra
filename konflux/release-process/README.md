@@ -27,42 +27,45 @@ just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1 --dry_run 
 # 2. Monitor payload release
 just check-release <PAYLOAD_RELEASE_NAME>
 
-# 3. Update bundle snapshot (creates PR to operator bundle repo)
+# 3. Get advisories from payload release
+just get-advisory <PAYLOAD_RELEASE_NAME>
+
+# 4. Update bundle snapshot (creates PR to operator bundle repo)
 just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false
 
-# 4. Monitor PR merge and wait for pipeline builds
+# 5. Monitor PR merge and wait for pipeline builds
 just check-pr bundle-acm <PR_NUMBER>
 just check-commit <MERGE_COMMIT_SHA>
 
-# 5. Get bundle snapshot from merged PR
+# 6. Get bundle snapshot from merged PR
 just get-snapshot-from-pr acm <PR_NUMBER>
 
-# 6. Create bundle release  
+# 7. Create bundle release  
 just release bundle stage acm 2.12.42 --snapshot <BUNDLE_SNAPSHOT> --rc 1 --dry_run false
 
-# 7. Monitor bundle release
+# 8. Monitor bundle release
 just check-release <BUNDLE_RELEASE_NAME>
 
-# 8. Update catalog request (creates PR to catalog repo)
+# 9. Update catalog request (creates PR to catalog repo)
 just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
 
-# 9. Monitor catalog PR merge and wait for pipeline builds
+# 10. Monitor catalog PR merge and wait for pipeline builds
 just check-pr catalog <PR_NUMBER>
 just check-commit <MERGE_COMMIT_SHA>
 
-# 10. Get catalog snapshot from merged PR
+# 11. Get catalog snapshot from merged PR
 just get-catalog-snapshot stage acm 2.12.42 <MERGE_COMMIT_SHA>
 
-# 11. Create catalog release (OCP versions auto-detected)
+# 12. Create catalog release (OCP versions auto-detected)
 just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dry_run false
 
-# 12. Monitor catalog releases (OCP versions auto-detected)
+# 13. Monitor catalog releases (OCP versions auto-detected)
 just check-catalog-releases stage acm 2.12.42 --rc 1
 
-# 13. Retrieve catalog index images (for QE/release thread)
+# 14. Retrieve catalog index images (for QE/release thread)
 just retrieve-fbc-catalog-images acm 2.12.42 --rc 1
 
-# 14. Create GitLab MR for release files
+# 15. Create GitLab MR for release files
 just create-mr acm 2.12.42
 ```
 
@@ -90,22 +93,22 @@ just generate-snapshot catalog prod acm 2.12.42 --dry_run false
 just check-pr catalog <PR_NUMBER>
 just check-commit <MERGE_COMMIT_SHA>
 
+# 7. Get catalog snapshot from merged PR commit
 # ⚠️  MANDATORY PAUSE: Send the catalog snapshot to QE in the release thread and
 #    WAIT for QE testing to complete before continuing! Do NOT proceed until QE signs off.
-# Get the catalog snapshot from the merged PR commit:
 just get-catalog-snapshot prod acm 2.12.42 <MERGE_COMMIT_SHA>
 
-# 7. Create catalog release files for STAGE NOT PROD
+# 8. Create catalog release files for STAGE NOT PROD
 # Note: RC is 1-prod to generate catalog files. Dry run TRUE is fine.
 just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
 
-# 8. Promote catalog to prod (from stage rc1-prod)
+# 9. Promote catalog to prod (from stage rc1-prod)
 just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 
-# 9. Monitor catalog releases
+# 10. Monitor catalog releases
 just check-catalog-releases prod acm 2.12.42
 
-# 10. Create GitLab MR for release files
+# 11. Create GitLab MR for release files
 just create-mr acm 2.12.42
 ```
 
