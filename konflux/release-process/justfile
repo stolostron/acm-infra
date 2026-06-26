@@ -291,7 +291,7 @@ query-cves app version: _check_github_access
         # Exclude Infrastructure Operator component (embargoed assisted-service CVEs)
         map(select(
             (.fields.labels | any(startswith("pscomponent:"))) and
-            (.fields.components | all(.name != "Infrastructure Operator"))
+            (.fields.components | all(.name != "Infrastructure Operator[ext]"))
         )) |
         map({
             key: (.fields.labels[] | select(test("^CVE-[0-9]+-[0-9]+$"))),
