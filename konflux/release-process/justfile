@@ -1471,7 +1471,7 @@ clone-release-mgmt branch_name:
     # Create branch from main if it doesn't exist, otherwise switch to it
     if git show-ref --verify --quiet refs/heads/{{branch_name}}; then
         git checkout {{branch_name}}
-        git pull origin {{branch_name}} --ff-only 2>/dev/null || true
+        git pull origin {{branch_name}} --rebase
         echo "✅ Switched to existing branch {{branch_name}}"
     elif git show-ref --verify --quiet refs/remotes/origin/{{branch_name}}; then
         git checkout -b {{branch_name}} origin/{{branch_name}}
