@@ -1,13 +1,39 @@
-## Agent Role During Release Process
+# Agent Instructions for Release Process
 
-When guiding a user through the release process (stage or prod workflows), act as a **guide only**. Provide the commands for the user to run themselves — do NOT execute release commands directly. Present commands with correct arguments filled in based on context, and explain what step comes next.
+## Agent Role
+
+Act as a **guide only**. Present commands with correct arguments filled in based on context. Explain what each step does and what comes next. The user runs all commands themselves.
+
+## Guardrails
+
+- **NEVER execute any `just` commands.** Not release commands, not monitoring commands, not cleanup. Guide only.
+- **NEVER run commands with `--dry_run false`** — only the user applies live changes.
+- **NEVER skip the QE pause** during prod workflow step 8 (see README.md). The user must wait for QE sign-off before proceeding.
+- **NEVER start ACM catalog steps before MCE catalog is fully complete** when releasing both apps.
+- **NEVER run `generate-snapshot bundle` before `release payload` completes.**
+- **NEVER run `generate-snapshot catalog` before `release bundle` completes.**
+- When presenting monitoring commands (`check-release`, `check-catalog-releases`, `check-commit`, `check-pr`), always warn the user these are long-running (can exceed 20 minutes) and suggest running them in a separate terminal.
 
 ## Project Context
-- justfile and utils.just are the main code body of this repo
-- run `just help` to view the usage of this justfile
-- This is ACM/MCE Release Process automation for creating Konflux releases
+
+- ACM/MCE Release Process automation for creating Konflux releases
+- Language: justfile (just 1.46.0), Python 3, shell
+- Run `just help` to view all available recipes
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `justfile` | Main recipe definitions |
+| `utils.just` | Shared utility recipes |
+| `lib/split_snapshot.py` | Catalog snapshot splitting logic |
+| `templates/release.yaml` | Release YAML template |
+| `bundle-repos/` | Cloned bundle/catalog repos (gitignored, created at runtime) |
+| `acm-release-management/` | Cloned release management repo (gitignored, created at runtime) |
+| `README.md` | Full command syntax, workflow steps, troubleshooting |
 
 ## Prerequisites
+
 - `oc` CLI logged into Konflux cluster (stone-prd-rh01.pg1f.p1.openshiftapps.com, project: crt-redhat-acm-tenant)
 - `gh` CLI configured with GitHub access
 - `jira` CLI configured with Red Hat Jira access
@@ -15,204 +41,59 @@ When guiding a user through the release process (stage or prod workflows), act a
 - Git user.name and user.email configured
 - VPN connection to Red Hat network (for GitLab access)
 
-## Stage Release Workflow
+## Workflows
 
-Complete workflow to release to STAGE:
+See `README.md` for complete step-by-step stage and prod release workflows with full command syntax.
 
-```bash
-# 1. Create payload release
-just release payload stage acm 2.12.42 --snapshot snapshot-xyz --rc 1 --dry_run false
+Key ordering constraint: **payload → bundle → catalog** (each step depends on the previous).
 
-# 2. Monitor payload release
-just check-release <PAYLOAD_RELEASE_NAME>
+When releasing both ACM and MCE:
+- Payload and bundle steps can run concurrently for ACM and MCE
+- **MCE catalog must fully complete before starting ACM catalog** — this includes all sub-steps (`generate-snapshot catalog`, PR merge, `release catalog`)
+- The PR created by `generate-snapshot` auto-merges, so there is no pause point during that step
 
-# 3. Get advisories from payload release
-just get-advisory <PAYLOAD_RELEASE_NAME>
+## RC Selection
 
-# 4. Update bundle snapshot (creates PR to operator bundle repo, rc required for stage)
-just generate-snapshot bundle stage acm 2.12.42 --rc 1 --dry_run false
+The `--rc` value in `generate-snapshot` selects the *source snapshot* from the previous step, not the RC being created:
+- `generate-snapshot bundle --rc N` → finds the **payload** snapshot from `release payload` rc N
+- `generate-snapshot catalog --rc N` → finds the **bundle** snapshot from `release bundle` rc N
 
-# 5. Monitor PR merge and wait for pipeline builds
-just check-pr bundle-acm <PR_NUMBER>
-just check-commit <MERGE_COMMIT_SHA>
+When retrying with a new RC suffix (e.g., `1-3`): if payload was released under `rc1`, `generate-snapshot bundle` still uses `--rc 1`. But `release bundle` and later steps use the new RC.
 
-# 6. Get bundle snapshot from merged PR
-just get-snapshot-from-pr acm <PR_NUMBER>
+## Error Recovery
 
-# 7. Create bundle release  
-just release bundle stage acm 2.12.42 --snapshot <BUNDLE_SNAPSHOT> --rc 1 --dry_run false
+### `check-release` times out (>20 minutes)
+1. Have the user inspect the Release CR directly: `oc get release <name> -o yaml`
+2. Check `.status.conditions` for failure reasons
+3. Common cause: advisory creation failure — check `.status.releasePipelineRun`
+4. If truly stuck, the user can delete the Release CR and re-run the `release` command
 
-# 8. Monitor bundle release
-just check-release <BUNDLE_RELEASE_NAME>
+### PR fails to merge (bundle or catalog)
+1. Have the user check PR status on GitHub: `gh pr view <PR_NUMBER> --repo <repo>`
+2. Common causes: CI failure, merge conflicts, auto-merge not enabled
+3. If CI failed: user should inspect the failing check, fix if needed, re-push
+4. If merge conflict: user should close PR and re-run `generate-snapshot` to create a fresh PR
 
-# 9. Update catalog request (creates PR to catalog repo, rc required for stage)
-just generate-snapshot catalog stage acm 2.12.42 --rc 1 --dry_run false
+### Snapshot not found
+1. Verify the user is logged into correct cluster and namespace: `oc project crt-redhat-acm-tenant`
+2. Check snapshot exists: `oc get snapshot <name>`
+3. Common cause: pipeline hasn't finished building yet — wait and retry
+4. For `get-snapshot-from-pr`: ensure the PR is actually merged (not just approved)
 
-# 10. Monitor catalog PR merge and wait for pipeline builds
-just check-pr catalog <PR_NUMBER>
-just check-commit <MERGE_COMMIT_SHA>
+### Catalog snapshot not converging
+1. `get-catalog-snapshot` requires all OCP component snapshots to share the same git SHA
+2. If components are still building, wait and retry
+3. If one component failed, user needs to inspect the pipeline run for that component
 
-# 11. Get catalog snapshot from merged PR
-just get-catalog-snapshot stage acm 2.12.42 <MERGE_COMMIT_SHA>
+## Common Gotchas
 
-# 12. Create catalog release (OCP versions auto-detected)
-just release catalog stage acm 2.12.42 --snapshot <CATALOG_SNAPSHOT> --rc 1 --dry_run false
+- justfile uses `just 1.46.0` — recipe arguments use `--arg value` syntax (not `arg=value`). Global variables still use `arg=value` *before* the recipe name (e.g., `just debug=true <recipe> --arg value`)
+- All operations default to dry-run — must pass `--dry_run false` to apply live
+- Catalog OCP versions are auto-detected from catalog config
+- Y-stream releases (X.Y.0) skip bug/CVE queries and use RHEA type
+- Z-stream releases (X.Y.Z, Z > 0) query bugs/CVEs and use RHSA/RHBA/RHEA based on content
+- Catalog OCP versions can be overridden with `--ocp_versions "4.14,4.15"` or `--ocp_versions "4.14-4.17"`
 
-# 13. Monitor catalog releases (OCP versions auto-detected)
-just check-catalog-releases stage acm 2.12.42 --rc 1
+## Git Conventions
 
-# 14. Retrieve catalog index images (for QE/release thread)
-just retrieve-fbc-catalog-images acm 2.12.42 --rc 1
-
-# 15. Create GitLab MR for release files
-just create-mr acm 2.12.42
-```
-
-## Prod Release Workflow
-
-Complete workflow to promote STAGE to PROD:
-
-**Important**: `--rc` specifies which stage RC to promote FROM (e.g. `--rc 1` promotes from stage rc1)
-
-```bash
-# 1. Promote payload to prod (from stage rc1)
-just release payload prod acm 2.12.42 --rc 1 --dry_run false
-
-# 2. Monitor payload release
-just check-release <PAYLOAD_RELEASE_NAME>
-
-# 3. Get advisories from payload release
-just get-advisory <PAYLOAD_RELEASE_NAME>
-
-# 4. Promote bundle to prod (from stage rc1)
-just release bundle prod acm 2.12.42 --rc 1 --dry_run false
-
-# 5. Monitor bundle release
-just check-release <BUNDLE_RELEASE_NAME>
-
-# 6. Update catalog request for prod (creates PR to catalog repo, rc not needed for prod)
-just generate-snapshot catalog prod acm 2.12.42 --dry_run false
-
-# 7. Monitor catalog PR merge and wait for pipeline builds
-just check-pr catalog <PR_NUMBER>
-just check-commit <MERGE_COMMIT_SHA>
-
-# 8. Get catalog snapshot from merged PR commit
-# ⚠️  MANDATORY PAUSE: Send the catalog snapshot to QE in the release thread and
-#    WAIT for QE testing to complete before continuing! Do NOT proceed until QE signs off.
-just get-catalog-snapshot prod acm 2.12.42 <MERGE_COMMIT_SHA>
-
-# 9. Create catalog release files for STAGE NOT PROD
-# Note: RC is 1-prod to generate catalog files. Dry run TRUE is fine.
-just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
-
-# 10. Promote catalog to prod (from stage rc1-prod)
-just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
-
-# 11. Monitor catalog releases
-just check-catalog-releases prod acm 2.12.42
-
-# 12. Create GitLab MR for release files
-just create-mr acm 2.12.42
-```
-
-## Key Command Syntax
-
-Main release command:
-```bash
-just release <target> <type> <app> <version> [--snapshot <name>] [--rc <N>] [--dry_run false]
-```
-
-- **target**: payload, bundle, or catalog
-- **type**: stage or prod
-- **app**: acm or mce
-- **version**: e.g., "2.12.42"
-- **--snapshot**: Snapshot name (required for stage)
-- **--rc**: RC number (required for all; specifies source RC for prod promotions)
-- **--dry_run false**: Apply live (default is dry-run)
-
-`release` delegates to `stage-release` or `prod-release` based on `type`. These can also be called directly:
-```bash
-just stage-release <target> <app> <version> <snapshot> --rc <N> [--dry_run false]
-just prod-release <target> <app> <version> --rc <N> [--dry_run false]
-```
-
-Generate snapshot/PR:
-```bash
-just generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run false]
-```
-- **target**: bundle (updates operator bundle repo) or catalog (updates catalog request)
-- **--rc**: Required for stage, not used for prod
-
-### RC Selection for `generate-snapshot`
-
-**Important:** The `--rc` value in `generate-snapshot` selects the *source snapshot* from the previous step, not the RC being created:
-- `generate-snapshot bundle` uses `--rc` to select the **payload** snapshot (from `release payload`)
-- `generate-snapshot catalog` uses `--rc` to select the **bundle** snapshot (from `release bundle`)
-
-This matters when retrying with a new RC suffix (e.g., `1-3`). If the payload was released under `rc1`, then `generate-snapshot bundle` still uses `--rc 1` to find that payload snapshot. But `release bundle` and subsequent steps use the new RC (`1-3`).
-
-Monitoring:
-```bash
-just check-release <release-name>
-just check-catalog-releases <type> <app> <version> [--rc <N>] [ocp_versions]
-just check-commit <commit-sha> [app_name] [namespace]
-just check-pr <target> <pr-number>   # targets: bundle-acm, bundle-mce, catalog
-```
-
-Utilities:
-```bash
-just retrieve-fbc-catalog-images <app> <version> --rc <N> [--ocp_versions <versions>]
-just get-snapshot-from-pr <app> <pr-number>
-just verify-catalog-snapshot <type> <app> <version> <snapshot>
-just get-catalog-snapshot <type> <app> <version> <commit-sha>
-just get-advisory <release-name>
-just create-mr <app> <version>
-just clone-release-mgmt <branch-name>
-just cleanup
-```
-
-## Branch Model
-
-All recipes for a given app+version share a single GitLab branch: `release-{app}-{version}` (e.g., `release-acm-2.12.42`). Stage RCs, prod promotions — everything goes on the same branch.
-
-Files are committed and pushed incrementally after each `stage-release` and `prod-release` step, so progress is backed up to GitLab piecewise. At the end of the workflow, `create-mr` opens a GitLab MR to merge the branch into main.
-
-## Multi-App Ordering (ACM + MCE)
-
-When releasing both ACM and MCE together:
-- **Payload and bundle steps** may be run concurrently for ACM and MCE (no dependency between them).
-- **Catalog step**: MCE catalog must be fully built and released **before** starting the ACM catalog. This applies to all catalog sub-steps (`generate-snapshot catalog`, PR merge, `release catalog`). Complete the entire MCE catalog flow first, then proceed with ACM.
-  - The PR that is created with `generate-snapshot` auto-merges if successful, so we cannot expect to pause during this step. The PR will merge, and the snapshot will be generated
-
-## Common "Gotchas"
-- This justfile is using `just 1.46.0`, which has new ways of handeling recipe arguments. No longer do you specify arguments with arg=value, you must instead add the [arg()] descriptor and then pass the argument with `--arg value`. Global variables are still specified with `arg=value` *before* the recipe call (example: `just debug=true <recipe> --<arg> <value>`)
-- **All apply operations default to dry-run** - Must pass `--dry_run false` to apply live
-- For **catalog** releases, OCP versions are auto-detected from catalog config
-- **Y-stream releases** (X.Y.0) skip bug/CVE queries and use RHEA type
-- **Z-stream releases** (X.Y.Z where Z > 0) query bugs/CVEs and use RHSA/RHBA/RHEA based on content
-- `release payload` must run before `generate-snapshot bundle`
-- `release bundle` must run before `generate-snapshot catalog`
-- Catalog OCP versions can be manually overridden with `--ocp_versions "4.14,4.15"` or `--ocp_versions "4.14-4.17"`
-
-## Directory Structure
-
-Files saved to acm-release-management repo:
-- **Prod**: `ACM/ACM-2.12.42/` (no rc subdirs)
-- **Stage**: `ACM/ACM-2.12.42/rc1/` (rc subdirs)
-- **Catalogs**: `ACM/ACM-2.12.42/rc1/catalogs/snapshots/` and `.../releases/`
-
-## Release and PR Check Processes
-
-These processes can run for extended periods (sometimes over an hour). If a process runs longer than 20 minutes, something likely went wrong and requires manual inspection.
-
-**Important:** When running these tasks, always include a 20 minute timeout to prevent hanging indefinitely.
-
-**Important:** Monitoring commands (`check-release`, `check-catalog-releases`, `check-commit`, `check-pr`) are long-running. Always run them asynchronously or in the background so the user can view progress and cancel if needed. Do not block the session on these commands.
-
-Track release progress:
-```bash
-just check-release <RELEASE_NAME>
-```
-
-Available after `release payload` and `release bundle` commands (not for catalog releases). Use `check-catalog-releases` for catalog monitoring instead.
+All commits must include a DCO `Signed-off-by` line. See the parent repository AGENTS.md for format and examples.
