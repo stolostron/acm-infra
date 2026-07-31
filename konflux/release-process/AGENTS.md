@@ -131,6 +131,12 @@ just release <target> <type> <app> <version> [--snapshot <name>] [--rc <N>] [--d
 - **--rc**: RC number (required for all; specifies source RC for prod promotions)
 - **--dry_run false**: Apply live (default is dry-run)
 
+`release` delegates to `stage-release` or `prod-release` based on `type`. These can also be called directly:
+```bash
+just stage-release <target> <app> <version> <snapshot> --rc <N> [--dry_run false]
+just prod-release <target> <app> <version> --rc <N> [--dry_run false]
+```
+
 Generate snapshot/PR:
 ```bash
 just generate-snapshot <target> <type> <app> <version> [--rc <N>] [--dry_run false]
@@ -197,8 +203,6 @@ Files saved to acm-release-management repo:
 - **Catalogs**: `ACM/ACM-2.12.42/rc1/catalogs/snapshots/` and `.../releases/`
 
 ## Release and PR Check Processes
-
-**WARNING: These processes are WIP and may not work reliably.**
 
 These processes can run for extended periods (sometimes over an hour). If a process runs longer than 20 minutes, something likely went wrong and requires manual inspection.
 

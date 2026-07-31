@@ -80,35 +80,38 @@ just release payload prod acm 2.12.42 --rc 1 --dry_run false
 # 2. Monitor payload release
 just check-release <PAYLOAD_RELEASE_NAME>
 
-# 3. Promote bundle to prod (from stage rc1)
+# 3. Get advisories from payload release
+just get-advisory <PAYLOAD_RELEASE_NAME>
+
+# 4. Promote bundle to prod (from stage rc1)
 just release bundle prod acm 2.12.42 --rc 1 --dry_run false
 
-# 4. Monitor bundle release
+# 5. Monitor bundle release
 just check-release <BUNDLE_RELEASE_NAME>
 
-# 5. Update catalog request for prod (creates PR to catalog repo)
+# 6. Update catalog request for prod (creates PR to catalog repo)
 just generate-snapshot catalog prod acm 2.12.42 --dry_run false
 
-# 6. Monitor catalog PR merge and wait for pipeline builds
+# 7. Monitor catalog PR merge and wait for pipeline builds
 just check-pr catalog <PR_NUMBER>
 just check-commit <MERGE_COMMIT_SHA>
 
-# 7. Get catalog snapshot from merged PR commit
+# 8. Get catalog snapshot from merged PR commit
 # ⚠️  MANDATORY PAUSE: Send the catalog snapshot to QE in the release thread and
 #    WAIT for QE testing to complete before continuing! Do NOT proceed until QE signs off.
 just get-catalog-snapshot prod acm 2.12.42 <MERGE_COMMIT_SHA>
 
-# 8. Create catalog release files for STAGE NOT PROD
+# 9. Create catalog release files for STAGE NOT PROD
 # Note: RC is 1-prod to generate catalog files. Dry run TRUE is fine.
 just release catalog stage acm 2.12.42 --rc 1-prod --snapshot <CATALOG_SNAPSHOT>
 
-# 9. Promote catalog to prod (from stage rc1-prod)
+# 10. Promote catalog to prod (from stage rc1-prod)
 just release catalog prod acm 2.12.42 --rc 1-prod --dry_run false
 
-# 10. Monitor catalog releases
+# 11. Monitor catalog releases
 just check-catalog-releases prod acm 2.12.42
 
-# 11. Create GitLab MR for release files
+# 12. Create GitLab MR for release files
 just create-mr acm 2.12.42
 ```
 
@@ -153,6 +156,22 @@ just release catalog stage acm 2.12.42 --snapshot snapshot-def --rc 1 --dry_run 
 6. Applies to cluster (dry-run or live)
 
 For **catalog** releases, OCP versions are automatically detected from the catalog config in `acm-mce-operator-catalogs` based on the version.
+
+`release` is a thin wrapper that delegates to `stage-release` or `prod-release` based on `type`. These underlying recipes can also be called directly:
+
+**`stage-release`** - generates YAML, saves to disk, and applies to cluster for a stage RC:
+```bash
+just stage-release <target> <app> <version> <snapshot> --rc <N> [--dry_run false]
+# Example:
+just stage-release payload acm 2.12.42 snapshot-xyz --rc 1
+```
+
+**`prod-release`** - promotes stage files to prod, updates them, and applies to cluster:
+```bash
+just prod-release <target> <app> <version> --rc <N> [--dry_run false]
+# Example:
+just prod-release payload acm 2.12.42 --rc 1
+```
 
 ---
 
