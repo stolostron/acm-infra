@@ -2078,9 +2078,9 @@ update-catalog-request type app version rc="" skip_confirm="false" dry_run="true
 # PipelineRun itself is frequently garbage collected but the Snapshot and the
 # GitHub PR persist.
 #
-# Output (stdout, no header): release,type,step,pipeline_or_release,start_time,stop_time,duration
-# pipeline_or_release is the PipelineRun/Release CR name for *-release steps,
-# or the Snapshot name for *-build steps.
+# Output (stdout, no header): release,type,step,reference,start_time,stop_time,duration
+# reference is the PipelineRun/Release CR name for *-release steps, or the
+# Snapshot name for *-build steps.
 # Missing timestamps (and duration, when either timestamp is missing) are
 # emitted as the literal string "null". duration is formatted as HhMMmSSs
 # (hours omitted when zero), e.g. "45m00s" or "1h02m30s".
@@ -2104,7 +2104,7 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
     # for whichever stage ran (the other is left null when its condition is
     # "Skipped"), so they are used here only to label the pipeline for
     # traceability, not as the timing source.
-    # Prints "pipeline_name|start_time|stop_time" (each "null" if unavailable).
+    # Prints "reference|start_time|stop_time" (each "null" if unavailable).
     get_pipelinerun_from_release() {
         local release_name="$1"
         local yaml pipeline_run start_time completion_time
@@ -2138,7 +2138,7 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
     # application label contains the given app, and among those the one with
     # the latest "Finished" transition is used.
     #
-    # Prints "snapshot_name|start_time|stop_time" (each "null" if unavailable).
+    # Prints "reference|start_time|stop_time" (each "null" if unavailable).
     get_timing_from_snapshot() {
         local sha="$1"
         local app="$2"
@@ -2245,8 +2245,8 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
             ;;
     esac
 
-    IFS='|' read -r pipeline_name start_time stop_time <<< "$result"
-    [[ -z "$pipeline_name" ]] && pipeline_name="null"
+    IFS='|' read -r reference start_time stop_time <<< "$result"
+    [[ -z "$reference" ]] && reference="null"
     [[ -z "$start_time" ]] && start_time="null"
     [[ -z "$stop_time" ]] && stop_time="null"
 
@@ -2270,7 +2270,7 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
         fi
     fi
 
-    echo "${release_label},{{type}},{{step}},${pipeline_name},${start_time},${stop_time},${duration}"
+    echo "${release_label},{{type}},{{step}},${reference},${start_time},${stop_time},${duration}"
 
 # Each step is optional — omit a step's parameter to skip recording it.
 # Delegates to record-step-timing for each step and does not modify any
@@ -2295,7 +2295,7 @@ record-release-timing type app version payload_release="" bundle_sha="" bundle_r
     #!/usr/bin/env bash
     set -euo pipefail
 
-    echo "release,type,step,pipeline_or_release,start_time,stop_time,duration"
+    echo "release,type,step,reference,start_time,stop_time,duration"
 
     if [[ -n "{{payload_release}}" ]]; then
         just debug={{debug}} record-step-timing payload-release {{type}} {{app}} {{version}} "{{payload_release}}"
