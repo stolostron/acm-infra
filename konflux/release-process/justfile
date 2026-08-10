@@ -67,6 +67,20 @@ help:
     @echo "    Monitor GitHub action and PR merge status"
     @echo "    Targets: bundle-acm, bundle-mce, catalog"
     @echo ""
+    @echo "TIMING REPORTS:"
+    @echo "  record-step-timing <step> <type> <app> <version> <release-or-sha> [ocp_versions]"
+    @echo "    Record a single CSV timing row for one release step, read from resource .status fields"
+    @echo "    Steps: payload-release, bundle-build, bundle-release, catalog-build, catalog-release"
+    @echo "    <release-or-sha>: Release CR name for *-release steps, commit SHA for *-build steps"
+    @echo "    ocp_versions is only used for catalog-release (auto-detected if omitted)"
+    @echo ""
+    @echo "  record-release-timing <type> <app> <version> [--payload_release <name>] [--bundle_sha <sha>]"
+    @echo "                         [--bundle_release <name>] [--catalog_sha <sha>] [--catalog_release <name>]"
+    @echo "                         [--ocp_versions <versions>]"
+    @echo "    Record CSV timing for all supplied steps of a release (outputs header + rows)"
+    @echo "    Example: just record-release-timing stage acm 2.12.42 --payload_release acm-stage-acm-212-z42-rc1 \\"
+    @echo "                 --bundle_sha abc123 --bundle_release acm-bundle-stage-acm-212-z42-rc1"
+    @echo ""
     @echo "UTILITIES:"
     @echo "  retrieve-fbc-catalog-images <app> <version> --rc <N> [--ocp_versions <versions>]"
     @echo "  get-snapshot-from-pr <app> <pr-number>"
@@ -2049,4 +2063,256 @@ update-catalog-request type app version rc="" skip_confirm="false" dry_run="true
 
         echo "" >&2
         echo "✅ Pull request created: $pr_url" >&2
+    fi
+
+# Reads timing from the resource's .status fields (post-hoc, not from a running
+# monitoring script). NOTE: does not modify or replace any check-* recipe.
+#
+# step:            payload-release | bundle-build | bundle-release | catalog-build | catalog-release
+# release_or_sha:  Release CR name for *-release steps, commit SHA for *-build steps
+# ocp_versions:    only used for catalog-release; auto-detected via _get_ocp_versions if omitted
+#
+# *-release steps measure only the Release CR's own duration (validation
+# through completion). *-build steps measure the full pipeline from PR
+# creation (GitHub) through Snapshot finalization (Konflux), since the build
+# PipelineRun itself is frequently garbage collected but the Snapshot and the
+# GitHub PR persist.
+#
+# Output (stdout, no header): release,type,step,pipeline_or_release,start_time,stop_time,duration
+# pipeline_or_release is the PipelineRun/Release CR name for *-release steps,
+# or the Snapshot name for *-build steps.
+# Missing timestamps (and duration, when either timestamp is missing) are
+# emitted as the literal string "null". duration is formatted as HhMMmSSs
+# (hours omitted when zero), e.g. "45m00s" or "1h02m30s".
+
+# Record a single CSV timing row for one release step
+[arg("ocp_versions", long = "ocp_versions")]
+record-step-timing step type app version release_or_sha ocp_versions="": (_validate_app app) _check_oc_cluster _check_yq _check_github_access
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    NAMESPACE="crt-redhat-acm-tenant"
+    release_label="{{app}}-{{version}}"
+
+    [[ "{{debug}}" == "true" ]] && echo "[record-step-timing] step={{step}} type={{type}} app={{app}} version={{version}} release_or_sha={{release_or_sha}}" >&2 || true
+
+    # Resolve a Release CR's own timing. The top-level .status.startTime /
+    # .status.completionTime span the full release process (validation +
+    # tenant + managed) and are populated as soon as the release starts,
+    # regardless of which processing stage actually runs. The per-stage
+    # managedProcessing/tenantProcessing.pipelineRun refs are only populated
+    # for whichever stage ran (the other is left null when its condition is
+    # "Skipped"), so they are used here only to label the pipeline for
+    # traceability, not as the timing source.
+    # Prints "pipeline_name|start_time|stop_time" (each "null" if unavailable).
+    get_pipelinerun_from_release() {
+        local release_name="$1"
+        local yaml pipeline_run start_time completion_time
+
+        yaml=$(oc get release "$release_name" -n "$NAMESPACE" -oyaml 2>/dev/null || true)
+        if [[ -z "$yaml" ]]; then
+            echo "null|null|null"
+            return
+        fi
+
+        pipeline_run=$(echo "$yaml" | yq '.status.managedProcessing.pipelineRun // .status.tenantProcessing.pipelineRun // "null"')
+        if [[ "$pipeline_run" != "null" ]]; then
+            pipeline_run=$(echo "$pipeline_run" | cut -d'/' -f2)
+        else
+            pipeline_run="$release_name"
+        fi
+
+        start_time=$(echo "$yaml" | yq '.status.startTime // "null"')
+        completion_time=$(echo "$yaml" | yq '.status.completionTime // "null"')
+        echo "${pipeline_run}|${start_time}|${completion_time}"
+    }
+
+    # Resolve a commit SHA -> the Snapshot(s) built from it -> the full
+    # duration from PR creation (GitHub) through Snapshot finalization
+    # (Konflux). The Snapshot is durable and survives build PipelineRun
+    # garbage collection, and it carries everything needed to look up the
+    # triggering PR (org/repo/number) via the Pipelines-as-Code labels.
+    #
+    # A commit can produce multiple Snapshots (e.g. stage and prod builds of
+    # the same commit), so results are filtered to Snapshots whose
+    # application label contains the given app, and among those the one with
+    # the latest "Finished" transition is used.
+    #
+    # Prints "snapshot_name|start_time|stop_time" (each "null" if unavailable).
+    get_timing_from_snapshot() {
+        local sha="$1"
+        local app="$2"
+        local json best snapshot_name pr_number org repo stop_time start_time
+
+        json=$(oc get snapshot -n "$NAMESPACE" -l "pac.test.appstudio.openshift.io/sha=${sha}" -o json 2>/dev/null || true)
+        [[ -z "$json" ]] && json='{"items": []}'
+
+        best=$(echo "$json" | jq -r --arg app "$app" '
+            [.items[]
+             | select((.metadata.labels["appstudio.openshift.io/application"] // "") | contains($app))
+             | {
+                 name: .metadata.name,
+                 pr: (.metadata.labels["pac.test.appstudio.openshift.io/pull-request"] // ""),
+                 org: (.metadata.labels["pac.test.appstudio.openshift.io/url-org"] // ""),
+                 repo: (.metadata.labels["pac.test.appstudio.openshift.io/url-repository"] // ""),
+                 finished: ([.status.conditions[]? | select(.reason == "Finished") | .lastTransitionTime][0] // "")
+               }
+             | select(.finished != "")
+            ]
+            | sort_by(.finished)
+            | .[-1] // empty
+            | @json
+        ' 2>/dev/null)
+
+        if [[ -z "$best" || "$best" == "null" ]]; then
+            echo "null|null|null"
+            return
+        fi
+
+        snapshot_name=$(echo "$best" | jq -r '.name')
+        pr_number=$(echo "$best" | jq -r '.pr')
+        org=$(echo "$best" | jq -r '.org')
+        repo=$(echo "$best" | jq -r '.repo')
+        stop_time=$(echo "$best" | jq -r '.finished')
+
+        start_time="null"
+        if [[ -n "$pr_number" && -n "$org" && -n "$repo" ]]; then
+            start_time=$(gh pr view "$pr_number" --repo "${org}/${repo}" --json createdAt -q '.createdAt' 2>/dev/null || echo "")
+            [[ -z "$start_time" ]] && start_time="null"
+        fi
+
+        echo "${snapshot_name}|${start_time}|${stop_time}"
+    }
+
+    case "{{step}}" in
+        payload-release|bundle-release)
+            result=$(get_pipelinerun_from_release "{{release_or_sha}}")
+            ;;
+        bundle-build|catalog-build)
+            result=$(get_timing_from_snapshot "{{release_or_sha}}" "{{app}}")
+            ;;
+        catalog-release)
+            # Auto-detect OCP versions if not provided
+            ocp_versions_resolved="{{ocp_versions}}"
+            if [[ -z "$ocp_versions_resolved" ]]; then
+                ocp_versions_resolved=$(just _get_ocp_versions {{app}} {{version}})
+            fi
+            versions=($(just _parse_ocp_versions "$ocp_versions_resolved"))
+
+            # The supplied release name carries an "ocm-<major>-<minor>" segment
+            # identifying its OCP version; swap that segment to build sibling
+            # release names for every other OCP version in this catalog release.
+            supplied="{{release_or_sha}}"
+            if [[ ! "$supplied" =~ ^(.*-ocm-)([0-9]+-[0-9]+)(-.*)$ ]]; then
+                echo "Error: release_or_sha for catalog-release must contain an 'ocm-<major>-<minor>' segment (e.g. acm-fbc-ocm-4-16-stage-acm-212-z42-rc1)" >&2
+                exit 1
+            fi
+            prefix="${BASH_REMATCH[1]}"
+            suffix="${BASH_REMATCH[3]}"
+
+            best_pr="null"
+            best_start="null"
+            best_end="null"
+            best_span=-1
+
+            for ocp_ver in "${versions[@]}"; do
+                ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
+                sibling_release="${prefix}${ocp_file_ver}${suffix}"
+
+                sib_result=$(get_pipelinerun_from_release "$sibling_release")
+                IFS='|' read -r sib_pr sib_start sib_end <<< "$sib_result"
+
+                if [[ "$sib_start" != "null" && "$sib_end" != "null" ]]; then
+                    start_epoch=$(date -d "$sib_start" +%s 2>/dev/null || echo -1)
+                    end_epoch=$(date -d "$sib_end" +%s 2>/dev/null || echo -1)
+                    if [[ "$start_epoch" -ge 0 && "$end_epoch" -ge 0 ]]; then
+                        span=$((end_epoch - start_epoch))
+                        if (( span > best_span )); then
+                            best_span=$span
+                            best_start="$sib_start"
+                            best_end="$sib_end"
+                            best_pr="$sib_pr"
+                        fi
+                    fi
+                fi
+            done
+
+            result="${best_pr}|${best_start}|${best_end}"
+            ;;
+        *)
+            echo "Error: step must be one of: payload-release, bundle-build, bundle-release, catalog-build, catalog-release" >&2
+            exit 1
+            ;;
+    esac
+
+    IFS='|' read -r pipeline_name start_time stop_time <<< "$result"
+    [[ -z "$pipeline_name" ]] && pipeline_name="null"
+    [[ -z "$start_time" ]] && start_time="null"
+    [[ -z "$stop_time" ]] && stop_time="null"
+
+    # Compute a human-readable duration (HhMMmSSs, hours omitted when zero)
+    # from the resolved timestamps. Left as "null" if either is unavailable
+    # or unparseable.
+    duration="null"
+    if [[ "$start_time" != "null" && "$stop_time" != "null" ]]; then
+        start_epoch=$(date -d "$start_time" +%s 2>/dev/null || echo "")
+        end_epoch=$(date -d "$stop_time" +%s 2>/dev/null || echo "")
+        if [[ -n "$start_epoch" && -n "$end_epoch" ]]; then
+            elapsed=$((end_epoch - start_epoch))
+            hours=$((elapsed / 3600))
+            minutes=$(((elapsed % 3600) / 60))
+            seconds=$((elapsed % 60))
+            if (( hours > 0 )); then
+                duration=$(printf '%dh%02dm%02ds' "$hours" "$minutes" "$seconds")
+            else
+                duration=$(printf '%dm%02ds' "$minutes" "$seconds")
+            fi
+        fi
+    fi
+
+    echo "${release_label},{{type}},{{step}},${pipeline_name},${start_time},${stop_time},${duration}"
+
+# Each step is optional — omit a step's parameter to skip recording it.
+# Delegates to record-step-timing for each step and does not modify any
+# check-* recipe.
+#
+# Example:
+#   just record-release-timing stage acm 2.12.42 \
+#     --payload_release acm-stage-acm-212-z42-rc1 \
+#     --bundle_sha abc123def \
+#     --bundle_release acm-bundle-stage-acm-212-z42-rc1 \
+#     --catalog_sha def456abc \
+#     --catalog_release acm-fbc-ocm-4-16-stage-acm-212-z42-rc1
+
+# Record CSV timing for all supplied steps of a release
+[arg("payload_release", long = "payload_release")]
+[arg("bundle_sha", long = "bundle_sha")]
+[arg("bundle_release", long = "bundle_release")]
+[arg("catalog_sha", long = "catalog_sha")]
+[arg("catalog_release", long = "catalog_release")]
+[arg("ocp_versions", long = "ocp_versions")]
+record-release-timing type app version payload_release="" bundle_sha="" bundle_release="" catalog_sha="" catalog_release="" ocp_versions="": (_validate_app app) _check_oc_cluster _check_yq
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "release,type,step,pipeline_or_release,start_time,stop_time,duration"
+
+    if [[ -n "{{payload_release}}" ]]; then
+        just debug={{debug}} record-step-timing payload-release {{type}} {{app}} {{version}} "{{payload_release}}"
+    fi
+
+    if [[ -n "{{bundle_sha}}" ]]; then
+        just debug={{debug}} record-step-timing bundle-build {{type}} {{app}} {{version}} "{{bundle_sha}}"
+    fi
+
+    if [[ -n "{{bundle_release}}" ]]; then
+        just debug={{debug}} record-step-timing bundle-release {{type}} {{app}} {{version}} "{{bundle_release}}"
+    fi
+
+    if [[ -n "{{catalog_sha}}" ]]; then
+        just debug={{debug}} record-step-timing catalog-build {{type}} {{app}} {{version}} "{{catalog_sha}}"
+    fi
+
+    if [[ -n "{{catalog_release}}" ]]; then
+        just debug={{debug}} record-step-timing catalog-release {{type}} {{app}} {{version}} "{{catalog_release}}" --ocp_versions "{{ocp_versions}}"
     fi
