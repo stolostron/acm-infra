@@ -68,11 +68,11 @@ help:
     @echo "    Targets: bundle-acm, bundle-mce, catalog"
     @echo ""
     @echo "TIMING REPORTS:"
-    @echo "  record-step-timing <step> <type> <app> <version> <release-or-sha> [ocp_versions]"
+    @echo "  record-step-timing <step> <type> <app> <version> <release-or-sha> [--ocp_versions <versions>]"
     @echo "    Record a single CSV timing row for one release step, read from resource .status fields"
     @echo "    Steps: payload-release, bundle-build, bundle-release, catalog-build, catalog-release"
     @echo "    <release-or-sha>: Release CR name for *-release steps, commit SHA for *-build steps"
-    @echo "    ocp_versions is only used for catalog-release (auto-detected if omitted)"
+    @echo "    --ocp_versions is only used for catalog-release (auto-detected if omitted)"
     @echo ""
     @echo "  record-release-timing <type> <app> <version> [--payload_release <name>] [--bundle_sha <sha>]"
     @echo "                         [--bundle_release <name>] [--catalog_sha <sha>] [--catalog_release <name>]"
@@ -2139,6 +2139,8 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
     # the latest "Finished" transition is used.
     #
     # Prints "reference|start_time|stop_time" (each "null" if unavailable).
+    # Note: push-triggered Snapshots lack the pull-request/url-org/url-repository
+    # PaC labels, so start_time is "null" for those (only stop_time is available).
     get_timing_from_snapshot() {
         local sha="$1"
         local app="$2"
@@ -2162,7 +2164,7 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
             | sort_by(.finished)
             | .[-1] // empty
             | @json
-        ' 2>/dev/null)
+        ' 2>/dev/null || true)
 
         if [[ -z "$best" || "$best" == "null" ]]; then
             echo "null|null|null"
