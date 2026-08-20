@@ -266,7 +266,7 @@ query-cves app version: _check_github_access
     gh api repos/stolostron/acm-config/contents/product/component-registry.yaml?ref=main --jq '.content' | base64 -d > "$registry_file"
 
     # Build the JQL query
-    jql_query="project = \"Red Hat Advanced Cluster Management\" and issuetype in (Weakness, Vulnerability) and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and \"Embargo Status\" != \"True\""
+    jql_query="project = \"Red Hat Advanced Cluster Management\" and issuetype in (Weakness, Vulnerability) and fixVersion = \"{{app}} {{version}}\" and resolution not in (\"Can't Do\", \"Cannot Reproduce\", Duplicate, MirrorOrphan, \"Not a Bug\", Obsolete, Unresolved, \"Won't Do\") and status not in (open, backlog) and \"Embargo Status\" != \"True\" and (labels is EMPTY OR labels != \"bundle-vulnerability\")"
 
     # Query Jira for CVEs
     jira_output=$(jira issue list -q "$jql_query" --raw 2>&1) || {
