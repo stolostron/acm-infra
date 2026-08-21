@@ -2099,15 +2099,13 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
     # Resolve a Release CR's own timing. The top-level .status.startTime /
     # .status.completionTime span the full release process (validation +
     # tenant + managed) and are populated as soon as the release starts,
-    # regardless of which processing stage actually runs. The per-stage
-    # managedProcessing/tenantProcessing.pipelineRun refs are only populated
-    # for whichever stage ran (the other is left null when its condition is
-    # "Skipped"), so they are used here only to label the pipeline for
-    # traceability, not as the timing source.
+    # regardless of which processing stage actually runs.
+    # The reference is the Release CR name itself — more useful for
+    # traceability than the per-stage pipelineRun.
     # Prints "reference|start_time|stop_time" (each "null" if unavailable).
-    get_pipelinerun_from_release() {
+    get_timing_from_release() {
         local release_name="$1"
-        local yaml pipeline_run start_time completion_time
+        local yaml start_time completion_time
 
         yaml=$(oc get release "$release_name" -n "$NAMESPACE" -oyaml 2>/dev/null || true)
         if [[ -z "$yaml" ]]; then
@@ -2115,16 +2113,25 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
             return
         fi
 
-        pipeline_run=$(echo "$yaml" | yq '.status.managedProcessing.pipelineRun // .status.tenantProcessing.pipelineRun // "null"')
-        if [[ "$pipeline_run" != "null" ]]; then
-            pipeline_run=$(echo "$pipeline_run" | cut -d'/' -f2)
-        else
-            pipeline_run="$release_name"
-        fi
-
         start_time=$(echo "$yaml" | yq '.status.startTime // "null"')
         completion_time=$(echo "$yaml" | yq '.status.completionTime // "null"')
-        echo "${pipeline_run}|${start_time}|${completion_time}"
+        echo "${release_name}|${start_time}|${completion_time}"
+    }
+
+    # Extract the commit SHA from a Release CR's pac annotation.
+    # Prints the SHA string, or "null" if not found.
+    get_sha_from_release() {
+        local release_name="$1"
+        local yaml sha
+
+        yaml=$(oc get release "$release_name" -n "$NAMESPACE" -oyaml 2>/dev/null || true)
+        if [[ -z "$yaml" ]]; then
+            echo "null"
+            return
+        fi
+
+        sha=$(echo "$yaml" | yq '.metadata.annotations."pac.test.appstudio.openshift.io/sha" // "null"')
+        echo "$sha"
     }
 
     # Resolve a commit SHA -> the Snapshot(s) built from it -> the full
@@ -2188,10 +2195,16 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
 
     case "{{step}}" in
         payload-release|bundle-release)
-            result=$(get_pipelinerun_from_release "{{release_or_sha}}")
+            result=$(get_timing_from_release "{{release_or_sha}}")
             ;;
         bundle-build|catalog-build)
-            result=$(get_timing_from_snapshot "{{release_or_sha}}" "{{app}}")
+            # If release_or_sha looks like a release name (not a raw 40-char SHA),
+            # extract the SHA from the Release CR's pac annotation
+            sha_or_release="{{release_or_sha}}"
+            if [[ ! "$sha_or_release" =~ ^[a-f0-9]{40}$ ]]; then
+                sha_or_release=$(get_sha_from_release "$sha_or_release")
+            fi
+            result=$(get_timing_from_snapshot "$sha_or_release" "{{app}}")
             ;;
         catalog-release)
             # Auto-detect OCP versions if not provided
@@ -2212,7 +2225,7 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
             prefix="${BASH_REMATCH[1]}"
             suffix="${BASH_REMATCH[3]}"
 
-            best_pr="null"
+            best_ref="null"
             best_start="null"
             best_end="null"
             best_span=-1
@@ -2221,8 +2234,8 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
                 ocp_file_ver=$(echo "$ocp_ver" | tr '.' '-')
                 sibling_release="${prefix}${ocp_file_ver}${suffix}"
 
-                sib_result=$(get_pipelinerun_from_release "$sibling_release")
-                IFS='|' read -r sib_pr sib_start sib_end <<< "$sib_result"
+                sib_result=$(get_timing_from_release "$sibling_release")
+                IFS='|' read -r sib_ref sib_start sib_end <<< "$sib_result"
 
                 if [[ "$sib_start" != "null" && "$sib_end" != "null" ]]; then
                     start_epoch=$(date -d "$sib_start" +%s 2>/dev/null || echo -1)
@@ -2233,13 +2246,13 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
                             best_span=$span
                             best_start="$sib_start"
                             best_end="$sib_end"
-                            best_pr="$sib_pr"
+                            best_ref="$sib_ref"
                         fi
                     fi
                 fi
             done
 
-            result="${best_pr}|${best_start}|${best_end}"
+            result="${best_ref}|${best_start}|${best_end}"
             ;;
         *)
             echo "Error: step must be one of: payload-release, bundle-build, bundle-release, catalog-build, catalog-release" >&2
@@ -2264,11 +2277,7 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
             hours=$((elapsed / 3600))
             minutes=$(((elapsed % 3600) / 60))
             seconds=$((elapsed % 60))
-            if (( hours > 0 )); then
-                duration=$(printf '%dh%02dm%02ds' "$hours" "$minutes" "$seconds")
-            else
-                duration=$(printf '%dm%02ds' "$minutes" "$seconds")
-            fi
+            duration=$(printf '%02d:%02d:%02d' "$hours" "$minutes" "$seconds")
         fi
     fi
 
@@ -2303,16 +2312,24 @@ record-release-timing type app version payload_release="" bundle_sha="" bundle_r
         just debug={{debug}} record-step-timing payload-release {{type}} {{app}} {{version}} "{{payload_release}}"
     fi
 
-    if [[ -n "{{bundle_sha}}" ]]; then
-        just debug={{debug}} record-step-timing bundle-build {{type}} {{app}} {{version}} "{{bundle_sha}}"
+    # For bundle-build, use bundle_sha if provided, otherwise use bundle_release
+    # (the SHA will be auto-extracted from the Release CR)
+    if [[ -n "{{bundle_sha}}" || -n "{{bundle_release}}" ]]; then
+        bundle_ref="{{bundle_sha}}"
+        [[ -z "$bundle_ref" ]] && bundle_ref="{{bundle_release}}"
+        just debug={{debug}} record-step-timing bundle-build {{type}} {{app}} {{version}} "$bundle_ref"
     fi
 
     if [[ -n "{{bundle_release}}" ]]; then
         just debug={{debug}} record-step-timing bundle-release {{type}} {{app}} {{version}} "{{bundle_release}}"
     fi
 
-    if [[ -n "{{catalog_sha}}" ]]; then
-        just debug={{debug}} record-step-timing catalog-build {{type}} {{app}} {{version}} "{{catalog_sha}}"
+    # For catalog-build, use catalog_sha if provided, otherwise use catalog_release
+    # (the SHA will be auto-extracted from the Release CR)
+    if [[ -n "{{catalog_sha}}" || -n "{{catalog_release}}" ]]; then
+        catalog_ref="{{catalog_sha}}"
+        [[ -z "$catalog_ref" ]] && catalog_ref="{{catalog_release}}"
+        just debug={{debug}} record-step-timing catalog-build {{type}} {{app}} {{version}} "$catalog_ref"
     fi
 
     if [[ -n "{{catalog_release}}" ]]; then
