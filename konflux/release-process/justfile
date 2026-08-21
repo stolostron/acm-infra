@@ -2118,22 +2118,6 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
         echo "${release_name}|${start_time}|${completion_time}"
     }
 
-    # Extract the commit SHA from a Release CR's pac annotation.
-    # Prints the SHA string, or "null" if not found.
-    get_sha_from_release() {
-        local release_name="$1"
-        local yaml sha
-
-        yaml=$(oc get release "$release_name" -n "$NAMESPACE" -oyaml 2>/dev/null || true)
-        if [[ -z "$yaml" ]]; then
-            echo "null"
-            return
-        fi
-
-        sha=$(echo "$yaml" | yq '.metadata.annotations."pac.test.appstudio.openshift.io/sha" // "null"')
-        echo "$sha"
-    }
-
     # Resolve a commit SHA -> the Snapshot(s) built from it -> the full
     # duration from PR creation (GitHub) through Snapshot finalization
     # (Konflux). The Snapshot is durable and survives build PipelineRun
