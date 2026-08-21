@@ -2118,6 +2118,22 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
         echo "${release_name}|${start_time}|${completion_time}"
     }
 
+    # Extract the commit SHA from a Release CR's pac annotation.
+    # Prints the SHA string, or "null" if not found.
+    get_sha_from_release() {
+        local release_name="$1"
+        local yaml sha
+
+        yaml=$(oc get release "$release_name" -n "$NAMESPACE" -oyaml 2>/dev/null || true)
+        if [[ -z "$yaml" ]]; then
+            echo "null"
+            return
+        fi
+
+        sha=$(echo "$yaml" | yq '.metadata.annotations."pac.test.appstudio.openshift.io/sha" // "null"')
+        echo "$sha"
+    }
+
     # Resolve a commit SHA -> the Snapshot(s) built from it -> the full
     # duration from PR creation (GitHub) through Snapshot finalization
     # (Konflux). The Snapshot is durable and survives build PipelineRun
@@ -2182,7 +2198,13 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
             result=$(get_timing_from_release "{{release_or_sha}}")
             ;;
         bundle-build|catalog-build)
-            result=$(get_timing_from_snapshot "{{release_or_sha}}" "{{app}}")
+            # If release_or_sha looks like a release name (not a raw 40-char SHA),
+            # extract the SHA from the Release CR's pac annotation
+            sha_or_release="{{release_or_sha}}"
+            if [[ ! "$sha_or_release" =~ ^[a-f0-9]{40}$ ]]; then
+                sha_or_release=$(get_sha_from_release "$sha_or_release")
+            fi
+            result=$(get_timing_from_snapshot "$sha_or_release" "{{app}}")
             ;;
         catalog-release)
             # Auto-detect OCP versions if not provided
@@ -2290,16 +2312,24 @@ record-release-timing type app version payload_release="" bundle_sha="" bundle_r
         just debug={{debug}} record-step-timing payload-release {{type}} {{app}} {{version}} "{{payload_release}}"
     fi
 
-    if [[ -n "{{bundle_sha}}" ]]; then
-        just debug={{debug}} record-step-timing bundle-build {{type}} {{app}} {{version}} "{{bundle_sha}}"
+    # For bundle-build, use bundle_sha if provided, otherwise use bundle_release
+    # (the SHA will be auto-extracted from the Release CR)
+    if [[ -n "{{bundle_sha}}" || -n "{{bundle_release}}" ]]; then
+        bundle_ref="{{bundle_sha}}"
+        [[ -z "$bundle_ref" ]] && bundle_ref="{{bundle_release}}"
+        just debug={{debug}} record-step-timing bundle-build {{type}} {{app}} {{version}} "$bundle_ref"
     fi
 
     if [[ -n "{{bundle_release}}" ]]; then
         just debug={{debug}} record-step-timing bundle-release {{type}} {{app}} {{version}} "{{bundle_release}}"
     fi
 
-    if [[ -n "{{catalog_sha}}" ]]; then
-        just debug={{debug}} record-step-timing catalog-build {{type}} {{app}} {{version}} "{{catalog_sha}}"
+    # For catalog-build, use catalog_sha if provided, otherwise use catalog_release
+    # (the SHA will be auto-extracted from the Release CR)
+    if [[ -n "{{catalog_sha}}" || -n "{{catalog_release}}" ]]; then
+        catalog_ref="{{catalog_sha}}"
+        [[ -z "$catalog_ref" ]] && catalog_ref="{{catalog_release}}"
+        just debug={{debug}} record-step-timing catalog-build {{type}} {{app}} {{version}} "$catalog_ref"
     fi
 
     if [[ -n "{{catalog_release}}" ]]; then
