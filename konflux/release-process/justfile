@@ -2255,11 +2255,7 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
             hours=$((elapsed / 3600))
             minutes=$(((elapsed % 3600) / 60))
             seconds=$((elapsed % 60))
-            if (( hours > 0 )); then
-                duration=$(printf '%dh%02dm%02ds' "$hours" "$minutes" "$seconds")
-            else
-                duration=$(printf '%dm%02ds' "$minutes" "$seconds")
-            fi
+            duration=$(printf '%02d:%02d:%02d' "$hours" "$minutes" "$seconds")
         fi
     fi
 
