@@ -2118,11 +2118,32 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
         echo "${release_name}|${start_time}|${completion_time}"
     }
 
-    # Extract the commit SHA from a Release CR's pac annotation.
-    # Prints the SHA string, or "null" if not found.
-    get_sha_from_release() {
+    # Extract the git revision from a Snapshot's component source.
+    # Prints the revision (commit SHA), or "null" if not found.
+    get_revision_from_snapshot() {
+        local snapshot_name="$1"
+        local yaml revision
+
+        yaml=$(oc get snapshot "$snapshot_name" -n "$NAMESPACE" -oyaml 2>/dev/null || true)
+        if [[ -z "$yaml" ]]; then
+            echo "null"
+            return
+        fi
+
+        revision=$(echo "$yaml" | yq '.spec.components[0].source.git.revision // "null"')
+        echo "$revision"
+    }
+
+    # Resolve a Release CR -> its Snapshot (via the
+    # release.appstudio.openshift.io/snapshot label) -> that Snapshot's git
+    # revision. Works for both bundle and catalog releases (bundle releases
+    # also carry a pac.test.appstudio.openshift.io/sha annotation with the
+    # same value, but the snapshot label is the only path catalog releases
+    # expose, so it is used uniformly here).
+    # Prints the revision (commit SHA), or "null" if not found.
+    get_revision_from_release() {
         local release_name="$1"
-        local yaml sha
+        local yaml snapshot_name
 
         yaml=$(oc get release "$release_name" -n "$NAMESPACE" -oyaml 2>/dev/null || true)
         if [[ -z "$yaml" ]]; then
@@ -2130,8 +2151,13 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
             return
         fi
 
-        sha=$(echo "$yaml" | yq '.metadata.annotations."pac.test.appstudio.openshift.io/sha" // "null"')
-        echo "$sha"
+        snapshot_name=$(echo "$yaml" | yq '.metadata.labels."release.appstudio.openshift.io/snapshot" // "null"')
+        if [[ "$snapshot_name" == "null" ]]; then
+            echo "null"
+            return
+        fi
+
+        get_revision_from_snapshot "$snapshot_name"
     }
 
     # Resolve a commit SHA -> the Snapshot(s) built from it -> the full
@@ -2199,10 +2225,11 @@ record-step-timing step type app version release_or_sha ocp_versions="": (_valid
             ;;
         bundle-build|catalog-build)
             # If release_or_sha looks like a release name (not a raw 40-char SHA),
-            # extract the SHA from the Release CR's pac annotation
+            # resolve it to its Snapshot's git revision via the release's
+            # snapshot label (works for both bundle and catalog releases).
             sha_or_release="{{release_or_sha}}"
             if [[ ! "$sha_or_release" =~ ^[a-f0-9]{40}$ ]]; then
-                sha_or_release=$(get_sha_from_release "$sha_or_release")
+                sha_or_release=$(get_revision_from_release "$sha_or_release")
             fi
             result=$(get_timing_from_snapshot "$sha_or_release" "{{app}}")
             ;;
@@ -2325,7 +2352,10 @@ record-release-timing type app version payload_release="" bundle_sha="" bundle_r
     fi
 
     # For catalog-build, use catalog_sha if provided, otherwise use catalog_release
-    # (the SHA will be auto-extracted from the Release CR)
+    # (the revision will be auto-extracted from the release's snapshot; all
+    # per-OCP-version sibling releases in a catalog release share one commit,
+    # so the supplied release's revision matches whichever sibling wins the
+    # timing comparison below)
     if [[ -n "{{catalog_sha}}" || -n "{{catalog_release}}" ]]; then
         catalog_ref="{{catalog_sha}}"
         [[ -z "$catalog_ref" ]] && catalog_ref="{{catalog_release}}"
