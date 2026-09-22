@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Harvest historical release AND catalog-build timing data since a given
-# date, from Release CRs in the cluster plus GitHub check-runs on the
-# catalog repo's build branches.
+# Harvest historical release, bundle-build, AND catalog-build timing data
+# since a given date, from Release CRs in the cluster plus GitHub check-runs
+# on the bundle and catalog repositories' build branches.
 #
 # --- Release rows (payload-release, bundle-release, catalog-release) ---
 #
@@ -47,18 +47,26 @@
 # = creationTimestamp + 7d), so releases older than --since (or than the
 # retention window, whichever is later) simply won't be found.
 #
-# --- Build rows (catalog-build only) ---
+# --- Build rows (bundle-build and catalog-build) ---
 #
-# Catalog builds have no reliable in-cluster record of *failures*: a failed
-# build never produces a Snapshot, and PipelineRuns are garbage-collected
-# within hours. The only durable record of both successful and failed
-# catalog builds is the GitHub check-run left on the triggering commit in
-# stolostron/acm-mce-operator-catalogs, on its "acm-redhat-operators" /
-# "mce-redhat-operators" branches (one push per commit fans out a
-# "<app>-fbc-ocm-<ocp-major>-<ocp-minor>-<stage|prod>-on-push" check-run per
-# OCP version). Every commit on those branches since --since is enumerated
-# and each matching check-run becomes one catalog-build row, so failed
-# builds are recorded, not just successful ones.
+# Builds have no reliable in-cluster record of *failures*: a failed build
+# never produces a Snapshot, and PipelineRuns are garbage-collected within
+# hours. The durable record of both successful and failed builds is the
+# GitHub check-run left on the triggering commit.
+#
+# Bundle builds are harvested from the canonical release branches in
+# stolostron/acm-operator-bundle ("release-X.Y") and
+# stolostron/mce-operator-bundle ("backplane-X.Y"). Each matching
+# "<app>-operator-bundle-<app>-<version>-on-push" check-run becomes one
+# bundle-build row. Bundle builds are classified as stage because the same
+# build snapshot is promoted to prod later.
+#
+# Catalog builds are harvested from the catalog repo's
+# "acm-redhat-operators" / "mce-redhat-operators" branches. One push per
+# commit fans out a "<app>-fbc-ocm-<ocp-major>-<ocp-minor>-<stage|prod>-on-push"
+# check-run per OCP version. Every commit on those branches since --since is
+# enumerated and each matching check-run becomes one catalog-build row, so
+# failed builds are recorded, not just successful ones.
 #
 # The check-run name only carries the target OCP version (e.g. "4.17"), not
 # the ACM/MCE product version — the "release" column for catalog-build rows
@@ -215,7 +223,70 @@ else
     echo "No matching releases found since ${SINCE_ISO}." >&2
 fi
 
-### --- Build rows (catalog-build, from GitHub check-runs) ---
+### --- Build rows (bundle-build and catalog-build, from GitHub check-runs) ---
+
+# Bundle builds are represented as stage rows because their snapshots are
+# promoted to prod by a later Release CR.
+for bundle_config in \
+    "acm:stolostron/acm-operator-bundle:release-[0-9]+\\.[0-9]+" \
+    "mce:stolostron/mce-operator-bundle:backplane-[0-9]+\\.[0-9]+"; do
+    app="${bundle_config%%:*}"
+    bundle_config="${bundle_config#*:}"
+    repo="${bundle_config%%:*}"
+    branch_pattern="${bundle_config#*:}"
+
+    echo "Fetching branches on ${repo} matching ${branch_pattern}..." >&2
+    branches=$(gh api --paginate "repos/${repo}/branches?per_page=100" 2>/dev/null \
+        | jq -r --arg pattern "^${branch_pattern}$" \
+            '.[] | select(.name | test($pattern)) | .name' || true)
+
+    if [[ -z "$branches" ]]; then
+        echo "  no release branches found on ${repo}" >&2
+        continue
+    fi
+
+    while read -r branch; do
+        [[ -z "$branch" ]] && continue
+        echo "Fetching commits on ${repo}@${branch} since ${SINCE_ISO}..." >&2
+        shas=$(gh api --paginate "repos/${repo}/commits?sha=${branch}&since=${SINCE_ISO}&per_page=100" \
+            2>/dev/null | jq -r '.[].sha' || true)
+
+        if [[ -z "$shas" ]]; then
+            echo "  no commits found on ${branch} since ${SINCE_ISO}" >&2
+            continue
+        fi
+
+        while read -r sha; do
+            [[ -z "$sha" ]] && continue
+            checkruns=$(gh api "repos/${repo}/commits/${sha}/check-runs?per_page=100" \
+                2>/dev/null || true)
+            [[ -z "$checkruns" ]] && continue
+
+            while IFS=$'\t' read -r nnn conclusion started completed cr_name; do
+                [[ -z "$nnn" ]] && continue
+                release_label="${app}-${nnn:0:1}.${nnn:1}"
+                reference="${sha:0:8}/${app}-operator-bundle-${app}-${nnn}-on-push"
+                released="False"
+                [[ "$conclusion" == "success" ]] && released="True"
+                start="${started:-null}"
+                completion="${completed:-null}"
+                [[ -z "$start" || "$start" == "null" ]] && start="null"
+                [[ -z "$completion" || "$completion" == "null" ]] && completion="null"
+                duration=$(compute_duration "$start" "$completion")
+                echo "  [bundle-build] ${release_label} (stage) -> ${reference} conclusion=${conclusion}" >&2
+                printf '%s,%s,%s,%s,%s,%s,%s,%s\n' \
+                    "$release_label" "stage" "bundle-build" "$reference" "$released" "$start" "$completion" "$duration" \
+                    >> "$tmp_file"
+            done < <(echo "$checkruns" | jq -r --arg app "$app" '
+                .check_runs[]
+                | select(.name | test("^Red Hat Konflux / " + $app + "-operator-bundle-" + $app + "-[0-9]+-on-push$"))
+                | (.name | capture($app + "-operator-bundle-" + $app + "-(?<nnn>[0-9]+)-on-push")) as $c
+                | [$c.nnn, (.conclusion // "null"), (.started_at // "null"), (.completed_at // "null"), .name]
+                | @tsv
+            ')
+        done <<< "$shas"
+    done <<< "$branches"
+done
 
 # Catalog builds fan out one "<app>-fbc-ocm-<ocp-major>-<ocp-minor>-<stage|prod>-on-push"
 # check-run per OCP version, per commit, on the app's build branch. Every
