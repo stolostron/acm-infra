@@ -40,7 +40,11 @@ For every flagged component,
 creates a JIRA issue (project `ACM`) listing each fixable CVE with its
 affected packages, the version that fixes it, and a link. Issues are
 de-duplicated while open (labelled `konflux,rox-cve,auto-created,component:<name>`)
-and auto-closed once the component's latest image is clean.
+and auto-closed once the component's latest image is *scanned and* clean.
+Auto-close is deliberately conservative: it is scoped to the applications in
+the current run (via an `application:<name>` label) and only closes issues
+whose component's scan status is `OK` — components with `NO_SCAN`/`ERROR`
+results (incomplete coverage) or missing inputs are never auto-closed.
 
 Results appear in the workflow's aggregate summary dashboard under
 **"Rox CVE Summary"**, with per-application counts and a details table of
