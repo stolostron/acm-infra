@@ -76,6 +76,11 @@ jobs:
   compliance-scan:
     name: Scan ${{ matrix.application }}
     runs-on: ubuntu-latest
+    # Least privilege: repo content is checked out with the GitHub App token
+    # and the scan/JIRA steps authenticate with repo secrets, so the default
+    # GITHUB_TOKEN only needs read access to repository contents.
+    permissions:
+      contents: read
 
     strategy:
       fail-fast: false
@@ -917,6 +922,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: compliance-scan
     if: always()
+    # Least privilege: this job only downloads run artifacts and writes the
+    # step summary, both of which use the runner's runtime token - the
+    # GITHUB_TOKEN requires no permissions.
+    permissions: {}
     timeout-minutes: 10
 
     steps:
