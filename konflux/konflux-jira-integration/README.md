@@ -15,6 +15,47 @@ This solution uses **GitHub Actions scheduled workflows** instead of Docker imag
 - ✅ Clear execution logs in GitHub UI
 - ✅ Free for public repos
 - ✅ **87% faster with tool caching** (15min → 2.5min per run)
+- ✅ **roxctl-scan CVE detection with JIRA integration** (see below)
+
+## Roxctl-scan CVE Detection
+
+Konflux component builds run a `roxctl-scan` task that scans the built
+container image for CVEs (via ACS). The parsed report is attached to the
+image in the registry as an OCI artifact
+(`application/vnd.redhat.rox-report+json`).
+
+The scanner ([`scripts/scan-rox-cves.py`](scripts/scan-rox-cves.py)):
+
+1. Lists the components of each Konflux application
+2. Resolves each component's latest branch-build image (from its most recent
+   non-PR snapshot)
+3. Fetches the attached rox report(s) from the registry (multiarch images
+   carry one report per architecture; they are merged)
+4. Flags components that have one or more **fixable** Critical or Important
+   CVEs (`fixedBy` is set — a fixed version exists). Unpatched CVEs (no fix
+   available) are counted but not actionable, so they do not trigger issues.
+
+For every flagged component,
+[`scripts/create-rox-cve-jira-issues.sh`](scripts/create-rox-cve-jira-issues.sh)
+creates a JIRA issue (project `ACM`) listing each fixable CVE with its
+affected packages, the version that fixes it, and a link. Issues are
+de-duplicated while open (labelled `konflux,rox-cve,auto-created,component:<name>`)
+and auto-closed once the component's latest image is clean.
+
+Results appear in the workflow's aggregate summary dashboard under
+**"Rox CVE Summary"**, with per-application counts and a details table of
+flagged components. CSV and JSON artifacts (`<app>-rox-cves.csv/.json`) are
+attached to every workflow run.
+
+Notes:
+- Components whose latest branch build predates the roxctl-scan rollout
+  report `NO_SCAN` — they flip to `OK`/`FLAGGED` after their next rebuild.
+- JIRA priority is `Critical` when any fixable Critical CVE is present,
+  otherwise `Major`.
+- To test locally: `python3 scripts/scan-rox-cves.py --output-dir data acm-215`
+  (requires `oc` logged in to the Konflux tenant) followed by
+  `scripts/create-rox-cve-jira-issues.sh --dry-run data/acm-215-rox-cves.json`.
+
 
 ## Quick Start
 

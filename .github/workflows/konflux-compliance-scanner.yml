@@ -755,6 +755,82 @@ jobs:
             echo "Note: Workflow will continue despite errors"
           fi
 
+      - name: Scan roxctl CVEs
+        if: steps.should_run.outputs.skip != 'true'
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
+        run: |
+          echo "=================================================="
+          echo "Scanning roxctl-scan CVE reports for ${{ matrix.application }}"
+          echo "=================================================="
+
+          set -o pipefail
+          python3 ./scan-rox-cves.py \
+            --output-dir ${{ github.workspace }}/data \
+            ${{ matrix.application }} 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-rox-cve-scan.log"
+          SCAN_EXIT_CODE=$?
+          set +o pipefail
+
+          if [[ $SCAN_EXIT_CODE -ne 0 ]]; then
+            echo "⚠ roxctl CVE scan completed with errors (exit code: $SCAN_EXIT_CODE) - continuing"
+          fi
+
+          ROX_CSV="${{ github.workspace }}/data/${{ matrix.application }}-rox-cves.csv"
+          if [[ -f "$ROX_CSV" ]]; then
+            FLAGGED=$(tail -n +2 "$ROX_CSV" | awk -F',' '$4 == "FLAGGED"' | wc -l | tr -d ' ')
+            NO_SCAN=$(tail -n +2 "$ROX_CSV" | awk -F',' '$4 == "NO_SCAN"' | wc -l | tr -d ' ')
+            echo "✓ roxctl CVE scan completed: $(tail -n +2 "$ROX_CSV" | wc -l | tr -d ' ') components, $FLAGGED flagged, $NO_SCAN without scan"
+          else
+            echo "⚠ No rox CVE CSV generated"
+          fi
+
+      - name: Create/Update rox CVE JIRA issues
+        if: steps.should_run.outputs.skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.create_jira_issues == 'true')
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}/konflux/konflux-jira-integration/scripts
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER: ${{ secrets.JIRA_USER }}
+          JIRA_AUTH_TYPE: ${{ env.JIRA_AUTH_TYPE }}
+          JIRA_SERVER: ${{ env.JIRA_SERVER }}
+          JIRA_INSTALLATION: ${{ env.JIRA_INSTALLATION }}
+          JIRA_PROJECT: ${{ env.JIRA_PROJECT }}
+          JIRA_BOARD: ${{ env.JIRA_BOARD }}
+        run: |
+          echo "=================================================="
+          echo "Creating/Updating rox CVE JIRA Issues for ${{ matrix.application }}"
+          echo "=================================================="
+
+          ROX_JSON="${{ github.workspace }}/data/${{ matrix.application }}-rox-cves.json"
+
+          if [[ ! -f "$ROX_JSON" ]]; then
+            echo "No rox CVE scan results found, skipping JIRA creation"
+            exit 0
+          fi
+
+          ROX_JIRA_CMD="./create-rox-cve-jira-issues.sh"
+          ROX_JIRA_CMD="$ROX_JIRA_CMD --skip-duplicates"
+          if [[ "${{ env.AUTO_CLOSE }}" == "true" ]]; then
+            ROX_JIRA_CMD="$ROX_JIRA_CMD --auto-close"
+          fi
+          ROX_JIRA_CMD="$ROX_JIRA_CMD --output-json ${{ github.workspace }}/logs/${{ matrix.application }}-rox-jira-issues.json"
+          ROX_JIRA_CMD="$ROX_JIRA_CMD --continue-on-error"
+          ROX_JIRA_CMD="$ROX_JIRA_CMD $ROX_JSON"
+
+          echo "Running: $ROX_JIRA_CMD"
+          echo ""
+
+          set -o pipefail
+          eval "$ROX_JIRA_CMD" 2>&1 | tee "${{ github.workspace }}/logs/${{ matrix.application }}-rox-jira.log"
+          JIRA_EXIT_CODE=$?
+          set +o pipefail
+
+          if [[ $JIRA_EXIT_CODE -eq 0 ]]; then
+            echo "✓ rox CVE JIRA issue creation/update completed successfully"
+          else
+            echo "⚠ rox CVE JIRA creation completed with some errors (exit code: $JIRA_EXIT_CODE)"
+          fi
+
       - name: Check release pipeline status
         if: steps.should_run.outputs.skip != 'true'
         continue-on-error: true
@@ -813,6 +889,8 @@ jobs:
             ${{ github.workspace }}/data/${{ matrix.application }}-compliance.csv
             ${{ github.workspace }}/data/${{ matrix.application }}-pending-failures.csv
             ${{ github.workspace }}/data/${{ matrix.application }}-release-status.csv
+            ${{ github.workspace }}/data/${{ matrix.application }}-rox-cves.csv
+            ${{ github.workspace }}/data/${{ matrix.application }}-rox-cves.json
             ${{ github.workspace }}/logs/${{ matrix.application }}-*.log
             ${{ github.workspace }}/logs/${{ matrix.application }}-*.json
           retention-days: 30
@@ -872,6 +950,9 @@ jobs:
           JIRA_CREATED=0
           JIRA_UPDATED=0
           JIRA_CLOSED=0
+          ROX_JIRA_CREATED=0
+          ROX_JIRA_UPDATED=0
+          ROX_JIRA_CLOSED=0
 
           APPS_PROCESSED=0
           APPS_WITH_ISSUES=0
@@ -885,6 +966,41 @@ jobs:
           > /tmp/aggregate/multiarch_failures.txt
           > /tmp/aggregate/promotion_failures.txt
           > /tmp/aggregate/jira_issues.txt
+          > /tmp/aggregate/rox_stats.txt
+          > /tmp/aggregate/rox_flagged.txt
+
+          # Process rox CVE scan results (if present)
+          ROX_CSV_FILES=$(find artifacts/ -name "*-rox-cves.csv" -type f 2>/dev/null | sort) || true
+          for rox_csv in $ROX_CSV_FILES; do
+            rox_app=$(basename "$rox_csv" | sed 's/-rox-cves\.csv$//')
+            rox_total=$(tail -n +2 "$rox_csv" | wc -l | tr -d ' ')
+            rox_flagged=$(tail -n +2 "$rox_csv" | awk -F',' '$4 == "FLAGGED"' | wc -l | tr -d ' ')
+            rox_ok=$(tail -n +2 "$rox_csv" | awk -F',' '$4 == "OK"' | wc -l | tr -d ' ')
+            rox_noscan=$(tail -n +2 "$rox_csv" | awk -F',' '$4 == "NO_SCAN"' | wc -l | tr -d ' ')
+            rox_crit=$(tail -n +2 "$rox_csv" | awk -F',' '$4 == "FLAGGED" {sum += $5} END {print sum+0}')
+            rox_imp=$(tail -n +2 "$rox_csv" | awk -F',' '$4 == "FLAGGED" {sum += $6} END {print sum+0}')
+            echo "$rox_app,$rox_total,$rox_ok,$rox_flagged,$rox_noscan,$rox_crit,$rox_imp" >> /tmp/aggregate/rox_stats.txt
+
+            tail -n +2 "$rox_csv" | awk -F',' '$4 == "FLAGGED"' | while IFS=',' read -r rcomp rdigest rtime rstatus rcrit rimp runpatched_crit runpatched_imp rcves; do
+              echo "$rox_app|$rcomp|$rcrit|$rimp|$rcves" >> /tmp/aggregate/rox_flagged.txt
+            done
+
+            # Parse rox JIRA logs for stats and issue keys
+            rox_artifact_dir=$(dirname "$(dirname "$rox_csv")")
+            rox_jira_log="$rox_artifact_dir/logs/${rox_app}-rox-jira.log"
+            if [[ -f "$rox_jira_log" ]]; then
+              rox_created=$(sed 's/\x1b\[[0-9;]*m//g' "$rox_jira_log" 2>/dev/null | grep "Issues created:" | sed 's/.*Issues created:[[:space:]]*//' | tr -d '[:space:]' | tail -1)
+              rox_updated=$(sed 's/\x1b\[[0-9;]*m//g' "$rox_jira_log" 2>/dev/null | grep "Issues updated:" | sed 's/.*Issues updated:[[:space:]]*//' | tr -d '[:space:]' | tail -1)
+              rox_closed=$(sed 's/\x1b\[[0-9;]*m//g' "$rox_jira_log" 2>/dev/null | grep "Issues closed:" | sed 's/.*Issues closed:[[:space:]]*//' | tr -d '[:space:]' | tail -1)
+              [[ ! "$rox_created" =~ ^[0-9]+$ ]] && rox_created=0
+              [[ ! "$rox_updated" =~ ^[0-9]+$ ]] && rox_updated=0
+              [[ ! "$rox_closed" =~ ^[0-9]+$ ]] && rox_closed=0
+              ROX_JIRA_CREATED=$((ROX_JIRA_CREATED + rox_created))
+              ROX_JIRA_UPDATED=$((ROX_JIRA_UPDATED + rox_updated))
+              ROX_JIRA_CLOSED=$((ROX_JIRA_CLOSED + rox_closed))
+              grep -oE 'ACM-[0-9]+' "$rox_jira_log" 2>/dev/null | sort -u >> /tmp/aggregate/jira_issues.txt || true
+            fi
+          done
 
           # Find all CSV files
           CSV_FILES=$(find artifacts/ -name "*-compliance.csv" -type f 2>/dev/null | sort) || true
@@ -1172,6 +1288,57 @@ jobs:
             done
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "</details>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Rox CVE Summary (roxctl-scan results)
+          if [[ -s /tmp/aggregate/rox_stats.txt ]]; then
+            ROX_TOTAL_FLAGGED=$(awk -F',' '{sum += $4} END {print sum+0}' /tmp/aggregate/rox_stats.txt)
+            ROX_TOTAL_CRIT=$(awk -F',' '{sum += $6} END {print sum+0}' /tmp/aggregate/rox_stats.txt)
+            ROX_TOTAL_IMP=$(awk -F',' '{sum += $7} END {print sum+0}' /tmp/aggregate/rox_stats.txt)
+
+            echo "### :shield: Rox CVE Summary (roxctl-scan)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            if [[ $ROX_TOTAL_FLAGGED -eq 0 ]]; then
+              echo ":white_check_mark: No fixable Critical/Important CVEs found in any scanned component" >> $GITHUB_STEP_SUMMARY
+            else
+              echo ":warning: **$ROX_TOTAL_FLAGGED components** have fixable Critical/Important CVEs ($ROX_TOTAL_CRIT critical, $ROX_TOTAL_IMP important) - JIRA issues are created/updated automatically" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Application | Components | Scanned OK | Flagged | No Scan | Critical (fixable) | Important (fixable) |" >> $GITHUB_STEP_SUMMARY
+            echo "|-------------|------------|------------|---------|---------|--------------------|---------------------|" >> $GITHUB_STEP_SUMMARY
+            sort /tmp/aggregate/rox_stats.txt | while IFS=',' read -r app total ok flagged noscan crit imp; do
+              icon=":white_check_mark:"
+              [[ $flagged -gt 0 ]] && icon=":x:"
+              echo "| $icon \`$app\` | $total | $ok | $flagged | $noscan | $crit | $imp |" >> $GITHUB_STEP_SUMMARY
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Flagged components detail
+            if [[ -s /tmp/aggregate/rox_flagged.txt ]]; then
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>:x: Components with fixable Critical/Important CVEs ($ROX_TOTAL_FLAGGED)</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Application | Component | Critical | Important | Fixable CVEs |" >> $GITHUB_STEP_SUMMARY
+              echo "|-------------|-----------|----------|-----------|-------------|" >> $GITHUB_STEP_SUMMARY
+              sort /tmp/aggregate/rox_flagged.txt | while IFS='|' read -r app comp crit imp cves; do
+                echo "| \`$app\` | \`$comp\` | $crit | $imp | ${cves:-} |" >> $GITHUB_STEP_SUMMARY
+              done
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "_Only fixable CVEs are listed (a fixed version is available). Unpatched CVEs are not actionable._" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Rox JIRA statistics
+            echo "#### Rox CVE JIRA Summary" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Action | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Issues Created | $ROX_JIRA_CREATED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Issues Updated | $ROX_JIRA_UPDATED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Issues Auto-Closed | $ROX_JIRA_CLOSED |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
 
